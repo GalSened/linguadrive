@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.7.0';
+var APP_VERSION = '2.7.1';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -92,8 +92,10 @@ var DEFAULTS = {
   recent: { turbo: [], car: [], vocab: [] },   // anti-repetition MRU windows (per practice mode)
   weak: {},                                    // '{lang}:{norm-en}' → {n misses, s hit-streak, t ts}
   spares: 0,                                   // 🛞 streak insurance (max 2) — earned by finishing all daily quests
+  turboCurve: {},                              // per-lang score-over-time of the BEST run (ghost race)
   weekXp: { week: '', base: 0 },               // league bookkeeping: xp at week start
-  league: { tier: 0, lastResult: null, seenWeek: '', pendingWeek: '' },
+  league: { tier: 0, lastResult: null, seenWeek: '', pendingWeek: '', lastRank: 0, lastRankBy: '' },
+  turboAttempts: { day: '', n: 0 },            // board-eligible turbo runs today (cap 3 — practice unlimited)
   meta: { updatedAt: 0, settingsAt: 0 }        // cloud-sync LWW timestamps
 };
 var S = load();
@@ -121,6 +123,8 @@ function load() {
     s.spares = Math.max(0, Math.min(2, +s.spares || 0));
     s.weekXp = Object.assign({}, d.weekXp, (s.weekXp && typeof s.weekXp === 'object') ? s.weekXp : {});
     s.league = Object.assign({}, d.league, (s.league && typeof s.league === 'object') ? s.league : {});
+    s.turboAttempts = Object.assign({}, d.turboAttempts, (s.turboAttempts && typeof s.turboAttempts === 'object') ? s.turboAttempts : {});
+    s.turboCurve = (s.turboCurve && typeof s.turboCurve === 'object' && !Array.isArray(s.turboCurve)) ? s.turboCurve : {};
     return Object.assign(d, s, { settings: s.settings });
   } catch (e) { return JSON.parse(JSON.stringify(DEFAULTS)); }
 }
@@ -1566,7 +1570,10 @@ Car.renderConfig = function () {
     html += '<div class="kicker" style="margin-top:.9rem">אילו מילים</div>' +
       chips([['learned', '📗 מהשיעורים שלי'], ['all', '🌍 כל אוצר המילים']], s.turboPool === 'all' ? 'all' : 'learned', 'cpool') +
       '<div class="kicker" style="margin-top:.9rem">איך עונים</div>' + chips(inOpts, Turbo.inputMode(), 'cinput') +
-      '<div class="small muted" style="margin-top:.8rem">🏁 60 שניות: אני אומר בעברית — אתה עונה מהר ב' + activeLang().name + '. רצף תשובות = קומבו שמכפיל נקודות. השיא שלך: <b class="en" style="direction:ltr">' + (S.best['turbo_' + s.lang] || 0) + '</b></div>';
+      '<div class="small muted" style="margin-top:.8rem">🏁 60 שניות: אני אומר בעברית — אתה עונה מהר ב' + activeLang().name + '. רצף תשובות = קומבו שמכפיל נקודות. השיא שלך: <b class="en" style="direction:ltr">' + (S.best['turbo_' + s.lang] || 0) + '</b></div>' +
+      '<div class="small" style="margin-top:.4rem;color:' + (Turbo.tickets() ? 'var(--lane)' : 'var(--muted)') + '">🎟️ ניסיונות טבלה היום: ' + Turbo.tickets() + '/' + Turbo.TICKETS +
+      (Turbo.tickets() ? '' : ' · סבבי אימון חופשיים ללא הגבלה') +
+      ((S.turboCurve || {})[s.lang] ? ' · 👻 רוח הרפאים של השיא שלך תרוץ איתך' : '') + '</div>';
     if (!STT.supported) html += '<div class="small muted" style="margin-top:.4rem">אין זיהוי דיבור בדפדפן הזה — טורבו רץ בהקלדה</div>';
   }
   $('#carPrompt').innerHTML = html;
@@ -1817,6 +1824,20 @@ Turbo.comboLane = function () {
   for (var i = 0; i < 5; i++) html += '<i class="' + (i < Math.min(Turbo.combo, 5) ? 'on' : '') + '"></i>';
   $('#carLane').innerHTML = html;
 };
+/* board-eligible attempts: 3/day — scarcity makes each ranked run matter (research: bounded
+   sessions). Practice runs stay unlimited; only leaderboard submission is rationed. */
+Turbo.TICKETS = 3;
+Turbo.tickets = function () {
+  var k = todayKey();
+  if (!S.turboAttempts || S.turboAttempts.day !== k) { S.turboAttempts = { day: k, n: 0 }; }
+  return Math.max(0, Turbo.TICKETS - S.turboAttempts.n);
+};
+Turbo.useTicket = function () {
+  var left = Turbo.tickets();          /* also rolls the day */
+  if (left <= 0) return false;
+  S.turboAttempts.n++; save();
+  return true;
+};
 /* answer channel: voice when the browser has STT and the user chose it; typed otherwise */
 Turbo.inputMode = function () {
   if (!STT.supported) return 'type';
@@ -1864,6 +1885,11 @@ Turbo.typedAnswer = function (budgetMs) {
 Turbo.start = function () {
   Turbo.items = Turbo.pool();
   if (!Turbo.items.length) { toast('אין מילים לטורבו — פתח שיעור קודם'); return; }
+  /* ranked run = consumes one of today's 3 tickets; out of tickets → open practice run */
+  Turbo.ranked = Turbo.useTicket();
+  if (!Turbo.ranked) toast('🎟️ נגמרו ניסיונות הטבלה להיום — סבב אימון חופשי');
+  Turbo.curve = [];
+  Turbo.ghost = (S.turboCurve && S.turboCurve[S.settings.lang]) || null;
   Turbo.on = true; Turbo.score = 0; Turbo.combo = 0; Turbo.idx = 0;
   Car.state = 'run'; Car.paused = false; Car.cmd = null;
   Car.started = Date.now();
@@ -1930,8 +1956,18 @@ Turbo.loop = async function () {
           var gain = Logic.turboGain(Turbo.combo);
           Turbo.score += gain;
           if (Turbo.combo === 1) Beep.good(); else comboBeep(Turbo.combo);
+          var elapsed = Math.round((Date.now() - Car.started) / 1000);
+          Turbo.curve.push([elapsed, Turbo.score]);
+          /* ghost race: your best run's score at the same second — honest pace vs yourself */
+          var ghostHtml = '';
+          if (Turbo.ghost && Turbo.ghost.length) {
+            var gs = 0;
+            for (var gi = 0; gi < Turbo.ghost.length && Turbo.ghost[gi][0] <= elapsed; gi++) gs = Turbo.ghost[gi][1];
+            var gd = Turbo.score - gs;
+            ghostHtml = ' <span class="small" style="color:' + (gd >= 0 ? 'var(--ok)' : 'var(--danger)') + '">👻' + (gd >= 0 ? '+' : '') + gd + '</span>';
+          }
           var cs = $('#carScore');
-          cs.innerHTML = Turbo.score + ' <span class="small" style="color:var(--ok)">+' + gain + '</span>';
+          cs.innerHTML = Turbo.score + ' <span class="small" style="color:var(--ok)">+' + gain + '</span>' + ghostHtml;
           cs.classList.remove('pop'); void cs.offsetWidth; cs.classList.add('pop');
           $('#carScreen').classList.toggle('combo-hot', Turbo.combo >= 5);
           Car.setState('✓ ' + esc(item.en));
@@ -1962,8 +1998,14 @@ Turbo.finish = function () {
   var key = 'turbo_' + S.settings.lang;
   var prev = S.best[key] || 0;
   var record = Turbo.score > prev;
-  if (record) { S.best[key] = Turbo.score; save(); confetti(); }
-  if (record && window.Account) { try { Account.onTurboRecord(S.best[key]); } catch (e) { } }
+  if (record) {
+    S.best[key] = Turbo.score;
+    S.turboCurve[S.settings.lang] = (Turbo.curve || []).slice(0, 80);   /* the new ghost */
+    save(); confetti();
+  }
+  /* only ranked runs (ticketed) reach the leaderboard — practice PBs stay local */
+  if (record && Turbo.ranked && window.Account) { try { Account.onTurboRecord(S.best[key]); } catch (e) { } }
+  if (record && !Turbo.ranked) toast('🏆 שיא אישי בסבב אימון — לא נשלח לטבלה (נגמרו הכרטיסים להיום)');
   var min = Math.max(1, Math.round((Date.now() - Car.started) / 60000));
   logActivity(0, min); gameEvent('minutes', min); Car.started = 0;
   gameEvent('turbo', Turbo.score);
@@ -1972,7 +2014,8 @@ Turbo.finish = function () {
     '<br><button class="btn" id="turboShare" style="margin-top:.7rem">📤 שתף</button>';
   var ts = $('#turboShare');
   if (ts) ts.addEventListener('click', function () {
-    var txt = '🏁 טורבו 60 ב-LinguaDrive (' + activeLang().flag + '): ' + Turbo.score + ' נק׳' + (record ? ' — שיא חדש! 🏆' : '');
+    var txt = '🏁 טורבו 60 ב-LinguaDrive (' + activeLang().flag + '): ' + Turbo.score + ' נק׳' + (record ? ' — שיא חדש! 🏆' : '') +
+      '\nתנצח אותי? 😏';
     var u = appUrl(); if (u) txt += '\n' + u;
     shareText(txt);
   });
@@ -2046,7 +2089,8 @@ function dailyShareText() {
   var dParts = todayKey().split('-');
   var txt = '🏁 LinguaDrive — האתגר היומי ' + dParts[2] + '.' + dParts[1] + ' (' + activeLang().flag + ')\n' +
     (S.daily.grid || []).join('') + ' ' + S.daily.score + '/10' +
-    (S.dailyStreak > 1 ? ' · רצף ' + S.dailyStreak + ' ימים 🔥' : '');
+    (S.dailyStreak > 1 ? ' · רצף ' + S.dailyStreak + ' ימים 🔥' : '') +
+    '\nאותו אתגר מחכה גם לך — תנצח אותי? 😏';
   var u = appUrl();
   if (u) txt += '\n' + u;
   return txt;

@@ -43,8 +43,22 @@ const man = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
 man.icons.forEach(i => ok(fs.existsSync(i.src), 'manifest icon exists: ' + i.src));
 
 // version discipline: bump both together
-ok(app.includes("var APP_VERSION = '2.7.0'"), 'app version 2.7.0');
-ok(sw.includes('linguadrive-v2.7.0'), 'sw cache version bumped in lockstep');
+ok(app.includes("var APP_VERSION = '2.7.1'"), 'app version 2.7.1');
+ok(sw.includes('linguadrive-v2.7.1'), 'sw cache version bumped in lockstep');
+
+// v2.7.1: competitiveness — tickets, ghost race, chase framing, challenge shares
+ok(app.includes('Turbo.TICKETS'), 'turbo ticket cap defined');
+ok(app.includes('Turbo.useTicket'), 'tickets consumed at run start');
+ok(app.includes('Turbo.ranked'), 'ranked vs practice runs distinguished');
+ok(app.includes('turboCurve'), 'ghost curve stored');
+ok(app.includes('👻'), 'ghost pace indicator rendered');
+ok(app.includes('תנצח אותי'), 'challenge line in share texts');
+const leagueSrc = fs.readFileSync('league.js', 'utf8');
+ok(leagueSrc.includes('עוקף את'), 'league chase framing (rival above)');
+ok(leagueSrc.includes('בעקבותיך'), 'league chase framing (rival below)');
+ok(leagueSrc.includes('lastRank'), 'overtake detection state');
+ok(fs.readFileSync('merge.js', 'utf8').includes('turboAttempts'), 'merge carries tickets');
+ok(fs.readFileSync('merge.js', 'utf8').includes('turboCurve'), 'merge carries ghost curves');
 
 // v2.7.0: weekly micro-league — client-computed cohorts over the shared scores table
 const league = fs.readFileSync('league.js', 'utf8');

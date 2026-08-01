@@ -151,17 +151,38 @@
               '<span class="score">' + esc(String(r.s)) + '</span></div>' + divider;
           }).join('');
           html += '<div class="card"><div class="kicker">שבוע ' + esc(w) + ' · ' + mine.length + ' שחקנים במקצה שלך</div>' + rowsHtml + '</div>';
-          /* honest distance framing — never a fake near-miss */
-          if (myIdx >= zone) {
-            var needUp = mine[zone - 1].s - mine[myIdx].s + 1;
-            html += '<div class="card" style="text-align:center"><b>🎯 עוד ' + needUp + ' XP לאזור העלייה</b>' +
-              '<div class="btnrow" style="margin-top:.6rem"><button class="btn big primary" data-go="words/p:weak">🎯 מילים חלשות</button>' +
-              '<button class="btn big" data-cargo="turbo">🏁 טורבו</button></div></div>';
-          } else if (myIdx >= 0) {
-            html += '<div class="card small" style="text-align:center;color:var(--ok)">אתה באזור העלייה — שמור על הקצב! ' + t[0] + '</div>';
+          /* the CHASE — rivalry is personal: the one just above you, the one at your heels.
+             Honest distances only, never a fake near-miss. */
+          if (myIdx >= 0) {
+            var chase = '';
+            if (myIdx > 0) {
+              var gapUp = mine[myIdx - 1].s - mine[myIdx].s + 1;
+              chase += '<div>🎯 עוד <b>' + gapUp + ' XP</b> ואתה עוקף את <b>' + esc(mine[myIdx - 1].n || 'שחקן') + '</b></div>';
+            }
+            if (myIdx < mine.length - 1) {
+              var gapDown = mine[myIdx].s - mine[myIdx + 1].s;
+              chase += '<div class="small muted" style="margin-top:.2rem">⚠️ ' + esc(mine[myIdx + 1].n || 'שחקן') + ' בעקבותיך — פער ' + gapDown + ' XP בלבד</div>';
+            }
+            if (myIdx >= zone) {
+              var needUp = mine[zone - 1].s - mine[myIdx].s + 1;
+              chase += '<div class="small" style="margin-top:.3rem;color:var(--lane)">🏁 אזור העלייה במרחק ' + needUp + ' XP</div>';
+            } else {
+              chase += '<div class="small" style="margin-top:.3rem;color:var(--ok)">אתה באזור העלייה — שמור על הקצב! ' + t[0] + '</div>';
+            }
+            html += '<div class="card" style="text-align:center">' + chase +
+              '<div class="btnrow" style="margin-top:.7rem"><button class="btn big primary" data-go="words/p:weak">🎯 מילים חלשות</button>' +
+              '<button class="btn big" data-cargo="turbo">🏁 טורבו</button>' +
+              '<button class="btn big" id="lgShare">📤 שתף</button></div></div>';
+            /* remember the rank so the home strip can flag an overtake next visit */
+            lg().lastRank = myIdx + 1; lg().lastRankBy = w; save();
           }
         }
         $('#view').innerHTML = html;
+        var sh = $('#lgShare');
+        if (sh) sh.addEventListener('click', function () {
+          var myIdx2 = mine.findIndex(function (x) { return x.uid === uid; });
+          shareText('🏁 אני מקום ' + (myIdx2 + 1) + ' מתוך ' + mine.length + ' ב' + t[1] + ' השבוע ב-LinguaDrive!\nתנצח אותי? 😏\n' + (location.origin + location.pathname));
+        });
       };
       if (useCache) return go(cache.rows);
       Backend.topScores(boardOf(w), 500).then(function (r) {
@@ -191,7 +212,14 @@
       mine.sort(function (a, b) { return (b.s - a.s) || (a.t - b.t); });
       var i = mine.findIndex(function (x) { return x.uid === uid; });
       var sub = document.getElementById('lgStripSub');
-      if (sub && i >= 0) sub.textContent = 'מקום ' + (i + 1) + ' מתוך ' + mine.length + ' · ' + weeklyXp() + ' XP השבוע';
+      if (!sub || i < 0) return;
+      /* overtaken since the last look? loss aversion, stated honestly */
+      if (lg().lastRankBy === w && lg().lastRank && (i + 1) > lg().lastRank) {
+        sub.textContent = '⚠️ ירדת למקום ' + (i + 1) + ' — ' + ((mine[i - 1] || {}).n || 'מישהו') + ' עקף אותך';
+        sub.style.color = 'var(--danger)';
+      } else {
+        sub.textContent = 'מקום ' + (i + 1) + ' מתוך ' + mine.length + ' · ' + weeklyXp() + ' XP השבוע';
+      }
     };
     if (cache.week === w && cache.rows && Date.now() - cache.at < 90000) return fill(cache.rows);
     Backend.topScores(boardOf(w), 500).then(function (r) {

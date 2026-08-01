@@ -244,6 +244,26 @@
           return ka > kb ? { week: ka, base: num(wa.base) } : { week: kb, base: num(wb.base) };
         })(),
         league: isObj(lww.league) ? JSON.parse(JSON.stringify(lww.league)) : (d.league || { tier: 0, lastResult: null, seenWeek: '', pendingWeek: '' }),
+        /* ranked-run tickets: same day → the device that used MORE is right; else later day */
+        turboAttempts: (function () {
+          var xa = isObj(a.turboAttempts) ? a.turboAttempts : {}, xb = isObj(b.turboAttempts) ? b.turboAttempts : {};
+          var da = str(xa.day), db = str(xb.day);
+          if (da === db) return { day: da, n: maxNum(xa.n, xb.n) };
+          return da > db ? { day: da, n: num(xa.n) } : { day: db, n: num(xb.n) };
+        })(),
+        /* ghost curves ride with the record: per lang, keep the curve of the higher turbo best */
+        turboCurve: (function () {
+          var ca = isObj(a.turboCurve) ? a.turboCurve : {}, cb = isObj(b.turboCurve) ? b.turboCurve : {};
+          var ba = isObj(a.best) ? a.best : {}, bb = isObj(b.best) ? b.best : {};
+          var out2 = {};
+          Object.keys(ca).concat(Object.keys(cb)).forEach(function (lc) {
+            if (out2[lc]) return;
+            var pick = num(ba['turbo_' + lc]) >= num(bb['turbo_' + lc]) ? ca[lc] : cb[lc];
+            if (!Array.isArray(pick)) pick = Array.isArray(ca[lc]) ? ca[lc] : cb[lc];
+            if (Array.isArray(pick)) out2[lc] = pick.slice(0, 80);
+          });
+          return out2;
+        })(),
         meta: {
           updatedAt: Math.max(aTs, bTs),
           settingsAt: Math.max(aSet, bSet),

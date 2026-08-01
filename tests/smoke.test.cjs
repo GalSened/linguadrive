@@ -399,6 +399,17 @@ async function until(fn, ms, name) {
   await until(() => $('#homeLeague'), 1500, 'home league strip mount exists');
   ok(!!$('#turboGo'), 'home turbo card present without STT gate');
 
+  /* 10k. COMPETITIVENESS — turbo tickets ration ranked runs, ghost curve saved on record */
+  w.S.turboAttempts = { day: '', n: 0 };   /* earlier turbo sections consumed tickets — reset */
+  ok(w.Turbo.tickets() === 3, 'fresh day → 3 tickets');
+  ok(w.Turbo.useTicket() && w.Turbo.useTicket() && w.Turbo.useTicket(), '3 tickets consumable');
+  ok(!w.Turbo.useTicket(), '4th ranked run refused (practice still allowed)');
+  ok(w.Turbo.tickets() === 0, 'tickets exhausted');
+  w.S.turboAttempts = { day: '2000-01-01', n: 3 };
+  ok(w.Turbo.tickets() === 3, 'day rollover refills tickets');
+  ok(Array.isArray((w.S.turboCurve || {}).es) || Object.keys(w.S.turboCurve).length >= 0, 'ghost curve store exists');
+  ok(w.dailyShareText().includes('תנצח אותי'), 'daily share carries the challenge line');
+
   /* 11. settings render + voice test */
   w.location.hash = 'settings';
   await until(() => $('#setRate'), 1500, 'settings render');

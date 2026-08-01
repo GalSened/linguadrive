@@ -234,5 +234,22 @@ const M = (a, b) => Merge.mergeStates(a, b, DEFAULTS);
   ok(m4.weekXp.week === '2026-W32' && typeof m4.league === 'object', 'corrupt league fields fall back safely');
 }
 
+/* --- 15. competitiveness state: tickets same-day max, ghost curve follows the record --- */
+{
+  const a = D(), b = D();
+  a.turboAttempts = { day: '2026-08-01', n: 1 };
+  b.turboAttempts = { day: '2026-08-01', n: 3 };
+  const m = M(a, b);
+  ok(m.turboAttempts.n === 3, 'same day → max tickets used (no free retries via sync)');
+  b.turboAttempts = { day: '2026-08-02', n: 1 };
+  ok(M(a, b).turboAttempts.day === '2026-08-02', 'later day wins');
+  a.best = { turbo_en: 300 }; a.turboCurve = { en: [[5, 40], [20, 300]] };
+  b.best = { turbo_en: 220 }; b.turboCurve = { en: [[9, 60]] };
+  const m2 = M(a, b);
+  ok(m2.turboCurve.en.length === 2 && m2.turboCurve.en[1][1] === 300, 'ghost curve follows the higher record');
+  const m3 = M({ turboCurve: 'junk', turboAttempts: null }, b);
+  ok(Array.isArray(m3.turboCurve.en) && typeof m3.turboAttempts.n === 'number', 'corrupt competitive state falls back safely');
+}
+
 console.log(fail === 0 ? '  ✅ merge: ' + pass + ' passed' : '  ❌ merge: ' + fail + ' failed / ' + (pass + fail));
 process.exitCode = fail ? 1 : 0;
