@@ -1,14 +1,16 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.1.0';
+var APP_VERSION = '2.2.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
+/* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
+   in the same schema. Nothing else in the app assumes a fixed language count. */
 var LANGS = {
-  en: { code: 'en', name: 'אנגלית', flag: '🇺🇸', plate: 'EN·DRIVE', tagline: 'לומדים אנגלית בדרך',
+  en: { code: 'en', name: 'אנגלית', flag: '🇺🇸', plate: 'EN·DRIVE', tagline: 'המורה שלך לאנגלית',
         accents: [['en-US', 'אמריקאי 🇺🇸'], ['en-GB', 'בריטי 🇬🇧']], defAccent: 'en-US',
         pack: function () { return (typeof CONTENT_EN !== 'undefined') ? CONTENT_EN : null; } },
-  es: { code: 'es', name: 'ספרדית', flag: '🇪🇸', plate: 'ES·DRIVE', tagline: 'לומדים ספרדית בדרך',
+  es: { code: 'es', name: 'ספרדית', flag: '🇪🇸', plate: 'ES·DRIVE', tagline: 'המורה שלך לספרדית',
         accents: [['es-ES', 'ספרד 🇪🇸'], ['es-MX', 'לטיני 🇲🇽']], defAccent: 'es-ES',
         pack: function () { return (typeof CONTENT_ES !== 'undefined') ? CONTENT_ES : null; } }
 };
@@ -646,6 +648,19 @@ ROUTES.home = function () {
     '<div id="xpFill" style="height:100%;width:' + Math.round(100 * li.into / li.need) + '%;background:linear-gradient(90deg,var(--sign),var(--lane));border-radius:99px;transition:width .4s"></div></div></div>' +
     '<span class="small muted" id="xpMeta" style="direction:ltr">' + li.into + ' / ' + li.need + ' XP</span></div></div>';
 
+  /* the lesson is the product — it leads the page; driving is one way to practice it */
+  if (last) {
+    var prog0 = lessonProgress(last);
+    html += '<div class="signcard">' +
+      '<div class="kicker" style="color:rgba(242,245,244,.8)">' + (ls && ls.opened ? 'ממשיכים מאיפה שעצרת' : 'השיעור הבא שלך') + '</div>' +
+      '<div class="en-line">' + esc(last.en) + '</div>' +
+      '<div class="he-line">' + last.icon + ' ' + esc(last.he) + '</div>' +
+      laneProgress(prog0.done, prog0.total) +
+      '<div class="sign-tools"><button class="btn primary" style="flex:1" data-go="lesson/' + last.id + '">▶ לשיעור</button>' +
+      '<button class="btn" style="background:rgba(0,0,0,.25);border-color:transparent;color:#fff" data-cargo="lesson:' + last.id + '">🚗 תרגל בנסיעה</button></div>' +
+      '</div>';
+  }
+
   html += '<div class="statgrid">' +
     stat('🔥', Logic.computeStreak(S.log, Date.now()), 'ימים ברצף') +
     stat('🧠', masteredCount(), 'מילים שנקלטו') +
@@ -683,21 +698,9 @@ ROUTES.home = function () {
       '<b class="en" style="direction:ltr;color:var(--lane)">' + (S.best['turbo_' + S.settings.lang] || 0) + '</b></button>';
   }
 
-  if (last) {
-    var prog = lessonProgress(last);
-    html += '<div class="signcard">' +
-      '<div class="kicker" style="color:rgba(242,245,244,.8)">' + (ls && ls.opened ? 'ממשיכים מאיפה שעצרת' : 'השיעור הבא שלך') + '</div>' +
-      '<div class="en-line">' + esc(last.en) + '</div>' +
-      '<div class="he-line">' + last.icon + ' ' + esc(last.he) + '</div>' +
-      laneProgress(prog.done, prog.total) +
-      '<div class="sign-tools"><button class="btn primary" style="flex:1" data-go="lesson/' + last.id + '">▶ לשיעור</button>' +
-      '<button class="btn" style="background:rgba(0,0,0,.25);border-color:transparent;color:#fff" data-cargo="lesson:' + last.id + '">🚗 תרגל בנסיעה</button></div>' +
-      '</div>';
-  }
-
   html += '<div class="btnrow" style="margin-bottom:1rem">' +
     '<button class="btn big" data-go="srs">🃏 חזרות ' + (due ? '<span style="color:var(--danger)">(' + due + ')</span>' : '') + '</button>' +
-    '<button class="btn big" data-cargo="open">🚗 מצב נהיגה</button></div>';
+    '<button class="btn big" data-go="words">📖 ספריית המילים</button></div>';
 
   html += '<button class="lesson-item" data-go="clinic"><span class="lic">🗣️</span><span class="lt"><span class="he" style="display:block">קליניקת הגייה לדוברי עברית</span><span class="small muted">7 הצלילים שמסגירים מבטא ישראלי</span></span><span>›</span></button>';
 
@@ -1187,8 +1190,12 @@ ROUTES.srs = function () {
       '</div></div>' +
       '<div class="btnrow" id="srsGrade" style="visibility:hidden">' +
       '<button class="btn big danger" id="srsNo">🙈 עוד לא</button>' +
-      '<button class="btn big" id="srsMic" ' + (STT.supported ? '' : 'style="display:none"') + '>🎙️ בדוק אותי</button>' +
+      (STT.supported ? '<button class="btn big" id="srsMic">🎙️ בדוק</button>' : '') +
+      '<button class="btn big" id="srsType">⌨️ בדוק</button>' +
       '<button class="btn big primary" id="srsYes">✓ ידעתי</button></div>' +
+      '<div id="srsTypeZone" class="hide" style="margin-top:.5rem;display:flex;gap:.5rem">' +
+      '<input type="text" id="srsTypeIn" dir="ltr" autocomplete="off" autocapitalize="none" spellcheck="false" style="flex:1">' +
+      '<button class="btn primary" id="srsTypeGo" style="flex:none">בדוק</button></div>' +
       '<div class="scorebox" id="srsScore" style="margin-top:.6rem"></div>';
 
     var flash = $('#flash');
@@ -1219,6 +1226,21 @@ ROUTES.srs = function () {
       await sleep(800);
       gradeCard(ok);
     });
+    /* typed check — the written alternative to the mic */
+    $('#srsType').addEventListener('click', function () {
+      $('#srsTypeZone').classList.toggle('hide');
+      try { $('#srsTypeIn').focus(); } catch (e) { }
+    });
+    async function srsTypedCheck() {
+      var v = ($('#srsTypeIn').value || '').trim();
+      if (!v) return;
+      var r = Logic.typedMatch(w.en, v);
+      $('#srsScore').innerHTML = '<div class="scorenum ' + Logic.grade(r.score) + '">' + r.score + '%</div>';
+      await sleep(700);
+      gradeCard(r.ok);
+    }
+    $('#srsTypeGo').addEventListener('click', srsTypedCheck);
+    $('#srsTypeIn').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); srsTypedCheck(); } });
   }
 };
 
@@ -1820,17 +1842,13 @@ ROUTES.daily = function () {
     '<div style="font-size:2rem;font-weight:800;margin:.6rem 0">' + esc(item.he) + '</div>' +
     '<div id="dReveal" class="en" style="min-height:1.6rem;font-size:1.2rem"></div>' +
     '<div id="dFb" style="min-height:1.4rem;margin-top:.3rem"></div></div>';
-  if (STT.supported) {
-    html += '<div class="micstage"><button class="micbtn" id="ddMic">🎙️</button>' +
-      '<div class="small muted" id="ddHint">הקש ואמור את המילה</div></div>' +
-      '<button class="btn" id="ddSkip" style="width:100%">⏭ לא יודע — הצג ועבור</button>';
-  } else {
-    html += '<div class="btnrow"><button class="btn big" id="ddShow">👁 הצג תשובה</button></div>' +
-      '<div class="btnrow hide" id="ddSelf"><button class="btn big" id="ddNo">✗ טעיתי</button>' +
-      '<button class="btn big primary" id="ddYes">✓ ידעתי</button></div>';
-  }
+  /* answer by voice / typing / 4-choice — never voice-only (Gal's rule) */
+  html += '<div id="ddAnswer" style="margin-top:.2rem"></div>' +
+    '<button class="btn" id="ddSkip" style="width:100%;margin-top:.5rem">⏭ לא יודע — הצג ועבור</button>';
   $('#view').innerHTML = html;
+  var marked = false;
   function mark(hit, revealSpeak) {
+    if (marked) return; marked = true;
     run.marks.push(hit ? '🟩' : '🟥');
     $('#dReveal').textContent = item.en;
     $('#dFb').innerHTML = hit ? '<b style="color:var(--ok)">✓ ' + pick(CONTENT.praiseHe) + '</b>' : '<b style="color:var(--danger)">✗</b>';
@@ -1838,26 +1856,16 @@ ROUTES.daily = function () {
     if (revealSpeak) TTS.speak(item.en);
     setTimeout(function () { run.i++; ROUTES.daily(); }, hit ? 800 : 1400);
   }
-  var mic = $('#ddMic');
-  if (mic) {
-    mic.addEventListener('click', async function () {
-      TTS.stop(); mic.classList.add('listening'); $('#ddHint').textContent = 'מקשיב...'; Beep.go();
-      var res = await STT.listen({ timeout: 6000 });
-      mic.classList.remove('listening'); $('#ddHint').textContent = 'הקש ואמור את המילה';
-      if (!res.ok) { $('#dFb').innerHTML = '<span class="small muted">' + sttErrorHe(res.error) + '</span>'; return; }
-      var r = Logic.bestScore(item.en, res.alts);
-      mark(r.score >= 60, r.score < 60);
+  if (window.Answers) {
+    Answers.render($('#ddAnswer'), {
+      prefix: 'dd',
+      target: item,
+      pool: vocabPool('all'),
+      onResult: function (ok) { mark(ok, !ok); },
+      onVoiceIssue: function (txt) { $('#dFb').innerHTML = '<span class="small muted">' + esc(txt) + '</span>'; }
     });
-    $('#ddSkip').addEventListener('click', function () { mark(false, true); });
-  } else {
-    $('#ddShow').addEventListener('click', function () {
-      $('#dReveal').textContent = item.en; TTS.speak(item.en);
-      $('#ddShow').parentElement.classList.add('hide');
-      $('#ddSelf').classList.remove('hide');
-    });
-    $('#ddYes').addEventListener('click', function () { mark(true, false); });
-    $('#ddNo').addEventListener('click', function () { mark(false, false); });
   }
+  $('#ddSkip').addEventListener('click', function () { mark(false, true); });
 };
 
 /* ================= Screen: More / Progress / Settings ================= */
@@ -1901,7 +1909,7 @@ ROUTES.more = function () {
   });
   $('#aboutBtn').addEventListener('click', function () {
     openSheet('<h2>🚗 LinguaDrive</h2>' +
-      '<p class="small">אפליקציה ללימוד שפות בנסיעה. בנויה על יכולות הדיבור המובנות בדפדפן — חינם, בלי פרסומות.</p>' +
+      '<p class="small">אפליקציה ללימוד אנגלית וספרדית לדוברי עברית — שיעורים, אוצר מילים, חזרות חכמות ותרגול קולי (וגם מצב נהיגה לתרגול בדרך). בנויה על יכולות הדיבור המובנות בדפדפן — חינם, בלי פרסומות. שפות נוספות בהמשך.</p>' +
       '<p class="small" style="margin-top:.6rem"><b>פרטיות:</b> ההתקדמות נשמרת במכשיר. עם חשבון (אופציונלי) היא מסונכרנת גם לענן — כך אפשר לשחק מכמה מכשירים ולהופיע בטבלת השיאים. זיהוי הדיבור מתבצע דרך שירות הדיבור של הדפדפן.</p>' +
       '<p class="small" style="margin-top:.6rem"><b>בנסיעה:</b> האפליקציה בנויה לעבודה קולית מלאה. הפעל סשן לפני היציאה, הנח את הטלפון במעמד — והעיניים נשארות על הכביש.</p>' +
       '<p class="small muted" style="margin-top:.6rem">גרסה ' + APP_VERSION + ' · אנגלית + ספרדית · ' + (CONTENT_EN.lessons.length + CONTENT_ES.lessons.length) + ' שיעורים</p>' +
@@ -2069,7 +2077,7 @@ function showOnboarding() {
   function draw() {
     openSheet(
       '<h2>🚗 ברוך הבא ל-LinguaDrive</h2>' +
-      '<p class="small muted">מורה פרטי לנסיעה: שיעורים בקול, תרגול הגייה עם ציון, וחזרות חכמות. חינם לגמרי. אפשר לשחק בלי חשבון, ואפשר להירשם כדי לשמור התקדמות בין מכשירים ולהתחרות בטבלת השיאים.</p>' +
+      '<p class="small muted">המורה הפרטי שלך לאנגלית ולספרדית: שיעורים בקול, תרגול הגייה עם ציון, ספריית מילים וחזרות חכמות — ויש גם מצב נהיגה למי שרוצה לתרגל בדרך. חינם לגמרי. אפשר לשחק בלי חשבון, ואפשר להירשם כדי לשמור התקדמות בין מכשירים ולהתחרות בטבלת השיאים.</p>' +
       '<div class="kicker" style="margin-top:1rem">מה לומדים?</div><div class="chips">' +
       Object.keys(LANGS).map(function (k) { return '<button class="chip ' + (pickLang === k ? 'on' : '') + '" data-ob-lang="' + k + '" style="flex:1;text-align:center;padding:.65rem">' + LANGS[k].flag + ' ' + LANGS[k].name + '</button>'; }).join('') + '</div>' +
       '<div class="kicker" style="margin-top:1rem">מאיפה מתחילים?</div><div class="chips">' +

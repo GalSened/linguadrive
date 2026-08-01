@@ -182,64 +182,58 @@
       '<div style="font-size:2rem;font-weight:800;margin:.7rem 0">' + esc(w.he) + '</div>' +
       '<div id="pReveal" style="min-height:3.2rem"></div>' +
       '<div id="pScore" class="scorebox"></div></div>';
-    if (!Prac.revealed) {
-      html += '<div class="btnrow">' +
-        (STT.supported ? '<button class="btn big" id="pMic">🎙️ אמור</button>' : '') +
-        '<button class="btn big primary" id="pShow">👁 הצג</button></div>';
-    }
+    html += '<div id="pAnswer"></div>' +
+      '<button class="btn" id="pShow" style="width:100%;margin-top:.5rem">👁 לא יודע — הצג</button>';
     $('#view').innerHTML = html;
 
     var marked = false;
-    function reveal(speak, withButtons) {
-      if (!Prac.revealed) {
-        Prac.revealed = true;
-        var full = w.key ? cardWord(w.key) : null;
-        $('#pReveal').innerHTML = '<span class="en" style="font-size:1.5rem;font-weight:700;display:block">' + esc(w.en) + '</span>' +
-          (full && full.t ? '<span class="vt">' + esc(full.t) + '</span>' : '') +
-          (full && full.ex ? '<span class="small muted en" style="display:block;margin-top:.3rem">' + esc(full.ex) + '</span>' : '');
-        if (speak) TTS.speak(w.en);
-      }
-      if (withButtons && !$('#pYes')) {
-        var row = document.createElement('div');
-        row.className = 'btnrow'; row.style.marginTop = '.6rem';
-        row.innerHTML = '<button class="btn big danger" id="pNo">🙈 עוד לא</button>' +
-          (w.key && !S.srs[w.key] ? '<button class="btn big" id="pAdd">➕ לחזרות</button>' : '') +
-          '<button class="btn big primary" id="pYes">✓ ידעתי</button>';
-        $('#view').appendChild(row);
-        $('#pYes').addEventListener('click', function () { mark(true, false); });
-        $('#pNo').addEventListener('click', function () { mark(false, false); });
-        var pa = $('#pAdd');
-        if (pa) pa.addEventListener('click', function () {
-          S.srs[w.key] = Logic.newCard(Date.now()); save(); updateBadges(); toast('נוספה לחזרות 🃏'); pa.remove();
-        });
-      }
+    function reveal(speak) {
+      if (Prac.revealed) return;
+      Prac.revealed = true;
+      var full = w.key ? cardWord(w.key) : null;
+      $('#pReveal').innerHTML = '<span class="en" style="font-size:1.5rem;font-weight:700;display:block">' + esc(w.en) + '</span>' +
+        (full && full.t ? '<span class="vt">' + esc(full.t) + '</span>' : '') +
+        (full && full.ex ? '<span class="small muted en" style="display:block;margin-top:.3rem">' + esc(full.ex) + '</span>' : '') +
+        (w.key && !S.srs[w.key] ? '<div><button class="btn" id="pAdd" style="margin-top:.4rem">➕ לחזרות</button></div>' : '');
+      if (speak) TTS.speak(w.en);
+      var pa = $('#pAdd');
+      if (pa) pa.addEventListener('click', function () {
+        S.srs[w.key] = Logic.newCard(Date.now()); save(); updateBadges(); toast('נוספה לחזרות 🃏'); pa.remove();
+      });
     }
-    /* single mark path — guarded so mic auto-mark and manual buttons can never double-count */
-    function mark(hit, viaMic) {
+    /* single mark path — guarded so no input mode can double-count.
+       recall strength: voice/typing = production (drill XP); 4-choice = recognition (srs XP) */
+    function mark(hit, method) {
       if (marked) return; marked = true;
       if (hit) { Prac.right++; Beep.good(); } else Beep.bad();
       Logic.pushRecent(S.recent.vocab, Logic.normalize(w.en), 150);
       logActivity(1, 0);
-      gameEvent(viaMic ? 'drill' : 'srs', 1, viaMic ? { score: hit ? 100 : 0 } : { ok: hit });
+      if (method === 'choice') gameEvent('srs', 1, { ok: hit });
+      else gameEvent('drill', 1, { score: hit ? 100 : 0 });
       if (w.key && S.srs[w.key]) { S.srs[w.key] = Logic.reviewCard(S.srs[w.key], hit, Date.now()); save(); }
       Prac.i++;
       setTimeout(renderPractice, hit ? 700 : 1500);
     }
+    if (window.Answers) {
+      Answers.render($('#pAnswer'), {
+        prefix: 'p',
+        target: w,
+        pool: poolFor(Prac.kind === 'all' ? 'all' : Prac.kind).length >= 4 ? poolFor(Prac.kind) : vocabPool('all'),
+        onResult: function (ok, meta) {
+          if (meta.method === 'voice' && meta.score != null) {
+            $('#pScore').innerHTML = '<div class="scorenum ' + Logic.grade(meta.score) + '">' + meta.score + '%</div>';
+          }
+          reveal(!ok);
+          mark(ok, meta.method);
+        },
+        onVoiceIssue: function (txt) { $('#pScore').innerHTML = '<span class="small muted">' + esc(txt) + '</span>'; }
+      });
+    }
     var show = $('#pShow');
-    if (show) show.addEventListener('click', function () { reveal(true, true); });
-    var mic = $('#pMic');
-    if (mic) mic.addEventListener('click', async function () {
+    if (show) show.addEventListener('click', function () {
       if (marked) return;
-      TTS.stop(); mic.classList.add('listening'); Beep.go();
-      var res = await STT.listen({ timeout: 6000 });
-      mic.classList.remove('listening');
-      if (marked) return;
-      if (!res.ok) { $('#pScore').innerHTML = '<span class="small muted">' + sttErrorHe(res.error) + '</span>'; return; }
-      var r = Logic.bestScore(w.en, res.alts);
-      $('#pScore').innerHTML = '<div class="scorenum ' + Logic.grade(r.score) + '">' + r.score + '%</div>';
-      var hit = r.score >= 60;
-      reveal(!hit, false);
-      mark(hit, true);
+      reveal(true);
+      mark(false, 'reveal');
     });
   }
 

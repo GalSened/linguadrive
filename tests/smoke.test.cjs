@@ -53,7 +53,7 @@ async function until(fn, ms, name) {
   /* ---- load scripts in order (as real Scripts, not eval) ---- */
   const ctx = dom.getInternalVMContext();
   for (const f of ['logic.js', 'merge.js', 'content.js', 'content-es.js', 'content-bank.js', 'content-bank-es.js',
-                   'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'vocab.js', 'account.js']) {
+                   'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'answers.js', 'vocab.js', 'account.js']) {
     vm.runInContext(fs.readFileSync(f, 'utf8'), ctx, { filename: f });
     /* smoke exercises the LOCAL-ONLY path deliberately (cloud path has its own suite: cloud.test) */
     if (f === 'cloud-config.js') vm.runInContext('window.CLOUD_CONFIG = null;', ctx, { filename: 'smoke-override' });
@@ -281,13 +281,34 @@ async function until(fn, ms, name) {
   ok(!!w.S.srs['bank:es:' + topic0.id + ':0'], 'bank SRS key format');
   ok(w.cardWord('bank:es:' + topic0.id + ':0').en === topic0.words[0].en, 'bank card resolves');
 
+  /* free practice — the written answer modes (never voice-only) */
+  const shownHe = () => ($('#view .card div[style*="2rem"]') || { textContent: '' }).textContent.trim();
+  const wordFor = () => topic0.words.find(x => x.he === shownHe());
+  w.S.settings.answerMode = 'type';
   w.location.hash = 'words/p:bank:' + topic0.id;
-  await until(() => $('#pShow'), 1500, 'free practice starts');
-  $('#pShow').click(); await sleep(50);
-  ok($('#pYes'), 'reveal shows grading buttons');
+  await until(() => $('#pType'), 1500, 'typed practice input renders');
+  let cur = wordFor();
+  ok(!!cur, 'current practice word identified from prompt');
+  $('#pType').value = cur.en;
   const recBefore = w.S.recent.vocab.length;
-  $('#pYes').click();
-  await until(() => w.S.recent.vocab.length > recBefore, 2000, 'practice feeds anti-repeat window');
+  $('#pTypeGo').click();
+  await until(() => w.S.recent.vocab.length > recBefore, 2500, 'typed correct answer accepted');
+  /* switch to 4-choice for the next item */
+  w.S.settings.answerMode = 'choice';
+  await until(() => [...d.querySelectorAll('#pAnswer .qopt')].length >= 2, 3500, 'choice mode renders options');
+  cur = wordFor();
+  const rightBtn = [...d.querySelectorAll('#pAnswer .qopt')].find(b => b.getAttribute('data-achoice') === cur.en);
+  ok(!!rightBtn, 'correct option present among 4 choices');
+  const rec2 = w.S.recent.vocab.length;
+  const heBefore = shownHe();
+  rightBtn.click();
+  await until(() => w.S.recent.vocab.length > rec2, 3500, 'choice answer accepted');
+  /* give-up path still works — wait for the NEXT item (prompt changes), not just button presence */
+  await until(() => shownHe() && shownHe() !== heBefore, 3500, 'next item renders');
+  const rec3 = w.S.recent.vocab.length;
+  $('#pShow').click();
+  await until(() => w.S.recent.vocab.length > rec3, 3500, 'reveal counts as an attempt');
+  w.S.settings.answerMode = ''; w.save();
 
   /* 10e. variety: turbo pool is wide and honors the recent window */
   w.setAppLang('en', false);

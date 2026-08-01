@@ -167,6 +167,29 @@
     return 'retry';
   }
 
+  /* typed answers: stricter than voice (no ASR noise to forgive) — exact normalized match,
+     or >=85 alignment for long answers (tolerates one small typo, not a different word) */
+  function typedMatch(target, typed, lang) {
+    var tN = normalize(target, lang), sN = normalize(typed, lang);
+    if (!sN) return { ok: false, score: 0 };
+    if (tN === sN) return { ok: true, score: 100 };
+    var r = alignScore(target, typed, lang);
+    return { ok: r.score >= 85, score: r.score };
+  }
+
+  /* choice mode: first n pool items that are not the target and not each other (pool pre-shuffled) */
+  function pickDistractors(pool, targetEn, n, keyOf) {
+    keyOf = keyOf || function (x) { return x && x.en; };
+    var seen = {}; seen[normalize(String(targetEn))] = 1;
+    var out = [];
+    for (var i = 0; i < (pool || []).length && out.length < (n || 3); i++) {
+      var k = normalize(String(keyOf(pool[i]) || ''));
+      if (!k || seen[k]) continue;
+      seen[k] = 1; out.push(pool[i]);
+    }
+    return out;
+  }
+
   // ---------- SRS (Leitner) ----------
   var BOX_INTERVALS_DAYS = [0, 1, 2, 4, 8, 16, 32]; // box 0..6
 
@@ -296,6 +319,8 @@
     alignScore: alignScore,
     bestScore: bestScore,
     grade: grade,
+    typedMatch: typedMatch,
+    pickDistractors: pickDistractors,
     BOX_INTERVALS_DAYS: BOX_INTERVALS_DAYS,
     newCard: newCard,
     reviewCard: reviewCard,
