@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.7.1';
+var APP_VERSION = '2.8.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -12,7 +12,10 @@ var LANGS = {
         pack: function () { return (typeof CONTENT_EN !== 'undefined') ? CONTENT_EN : null; } },
   es: { code: 'es', name: 'ספרדית', flag: '🇪🇸', plate: 'ES·DRIVE', tagline: 'המורה שלך לספרדית',
         accents: [['es-ES', 'ספרד 🇪🇸'], ['es-MX', 'לטיני 🇲🇽']], defAccent: 'es-ES',
-        pack: function () { return (typeof CONTENT_ES !== 'undefined') ? CONTENT_ES : null; } }
+        pack: function () { return (typeof CONTENT_ES !== 'undefined') ? CONTENT_ES : null; } },
+  he: { code: 'he', name: 'עברית גבוהה', flag: '🇮🇱', plate: 'HE·DRIVE', tagline: 'המורה שלך לעברית גבוהה',
+        accents: [['he-IL', 'עברית 🇮🇱']], defAccent: 'he-IL',
+        pack: function () { return (typeof CONTENT_HE !== 'undefined') ? CONTENT_HE : null; } }
 };
 function activeLang() { return LANGS[S.settings.lang] || LANGS.en; }
 function accentOf(code) { var L = LANGS[code] || LANGS.en; return (S.settings.accents && S.settings.accents[code]) || L.defAccent; }
@@ -22,6 +25,9 @@ function setAppLang(code, rerender) {
   CONTENT = LANGS[code].pack();
   Logic.setLang(code);
   TTS.pick();
+  /* Hebrew-enrichment track: the target-language fields hold HEBREW — flip the
+     .en/LTR typography back to RTL so high-register words render naturally */
+  try { document.body.classList.toggle('lang-he', code === 'he'); } catch (e) { }
   var p = document.getElementById('brandPlate'); if (p) p.textContent = LANGS[code].plate;
   var t = document.getElementById('brandTitle'); if (t) t.textContent = LANGS[code].tagline;
   if (rerender !== false) render();
@@ -73,8 +79,8 @@ var DEFAULTS = {
   settings: {
     lang: 'en',
     rate: 0.95,
-    accents: { en: 'en-US', es: 'es-ES' },
-    voiceURIs: { en: '', es: '' },
+    accents: { en: 'en-US', es: 'es-ES', he: 'he-IL' },
+    voiceURIs: { en: '', es: '', he: '' },
     pauseMs: 1500, repeats: 1, sound: true,
     carMode: 'repeat',      // repeat | translate
     carSource: 'smart',     // smart | lesson | clinic
@@ -87,7 +93,7 @@ var DEFAULTS = {
   },
   lessons: {}, srs: {}, log: {}, lastLesson: '',
   xp: 0, ach: {}, quests: null, boss: {}, best: {},
-  vehicle: '🚗', daily: null, dailyStreak: 0, lastDaily: '', freeRoam: false, entry: { en: 0, es: 0 },
+  vehicle: '🚗', daily: null, dailyStreak: 0, lastDaily: '', freeRoam: false, entry: { en: 0, es: 0, he: 0 },
   counters: { drills: 0, listens: 0, srs: 0, quizPerfects: 0, dialogues: 0, clinicHits: 0, minutes: 0, hardHits: 0, langs: {} },
   recent: { turbo: [], car: [], vocab: [] },   // anti-repetition MRU windows (per practice mode)
   weak: {},                                    // '{lang}:{norm-en}' → {n misses, s hit-streak, t ts}
@@ -165,7 +171,9 @@ function ensureCards(lesson) {
 }
 function bankOf(code) {
   code = code || S.settings.lang;
-  return code === 'es' ? (window.VOCAB_BANK_ES || null) : (window.VOCAB_BANK_EN || null);
+  if (code === 'es') return window.VOCAB_BANK_ES || null;
+  if (code === 'he') return window.VOCAB_BANK_HE || null;
+  return window.VOCAB_BANK_EN || null;
 }
 function bankTopic(code, topicId) {
   var bank = bankOf(code);
@@ -1389,7 +1397,7 @@ ROUTES.srs = function () {
       '<button class="btn big" id="srsType">⌨️ בדוק</button>' +
       '<button class="btn big primary" id="srsYes">✓ ידעתי</button></div>' +
       '<div id="srsTypeZone" class="hide" style="margin-top:.5rem;display:flex;gap:.5rem">' +
-      '<input type="text" id="srsTypeIn" dir="ltr" autocomplete="off" autocapitalize="none" spellcheck="false" style="flex:1">' +
+      '<input type="text" id="srsTypeIn" dir="' + (S.settings.lang === 'he' ? 'rtl' : 'ltr') + '" autocomplete="off" autocapitalize="none" spellcheck="false" style="flex:1">' +
       '<button class="btn primary" id="srsTypeGo" style="flex:none">בדוק</button></div>' +
       '<div class="scorebox" id="srsScore" style="margin-top:.6rem"></div>';
 
@@ -1848,9 +1856,12 @@ Turbo.show = function (item) {
   var html =
     '<span style="display:block;font-size:2rem;font-weight:800">' + esc(item.he) + '</span>' +
     '<span class="small muted" style="display:block;margin-top:.35rem">' + (typed ? 'הקלד ב' : 'אמור ב') + activeLang().name + '</span>';
-  if (typed) html += '<div style="display:flex;gap:.5rem;margin-top:.6rem;direction:ltr">' +
-    '<input type="text" id="tbType" dir="ltr" autocomplete="off" autocapitalize="none" spellcheck="false" style="flex:1;font-size:1.1rem;min-width:0">' +
-    '<button class="btn primary" id="tbGo" style="flex:none">✓</button></div>';
+  if (typed) {
+    var heDir = S.settings.lang === 'he' ? 'rtl' : 'ltr';
+    html += '<div style="display:flex;gap:.5rem;margin-top:.6rem;direction:' + heDir + '">' +
+      '<input type="text" id="tbType" dir="' + heDir + '" autocomplete="off" autocapitalize="none" spellcheck="false" style="flex:1;font-size:1.1rem;min-width:0">' +
+      '<button class="btn primary" id="tbGo" style="flex:none">✓</button></div>';
+  }
   $('#carPrompt').innerHTML = html;
 };
 /* resolves {typed:'...'} | {timeout:true} | {cmd:'stop|repeat|slow|skip'}; freezes the round
@@ -2406,7 +2417,7 @@ ROUTES.settings = function () {
 
 /* ================= Onboarding ================= */
 function showOnboarding() {
-  var startId = { en: 'l1', es: 's1' };
+  var startId = { en: 'l1', es: 's1', he: 'h1' };
   var pickLang = 'en', pickLevel = 'new';
   function draw() {
     openSheet(
@@ -2423,11 +2434,13 @@ function showOnboarding() {
     $('#obSound').addEventListener('click', function () {
       audioCtx();
       S.settings.lang = pickLang; TTS.pick();
-      TTS.speak(pickLang === 'es' ? '¡Hola! Vamos a aprender español.' : 'Hello! Let\'s learn English together.');
+      TTS.speak(pickLang === 'es' ? '¡Hola! Vamos a aprender español.' :
+        pickLang === 'he' ? 'שלום! הבה נעשיר את לשוננו.' : 'Hello! Let\'s learn English together.',
+        pickLang === 'he' ? { lang: 'he' } : {});
     });
     $('#obGo').addEventListener('click', function () {
       audioCtx();
-      var lvlMap = { en: { new: 'l1', some: 'l4', mid: 'l9' }, es: { new: 's1', some: 's4', mid: 's9' } };
+      var lvlMap = { en: { new: 'l1', some: 'l4', mid: 'l9' }, es: { new: 's1', some: 's4', mid: 's9' }, he: { new: 'h1', some: 'h4', mid: 'h9' } };
       S.onboarded = true;
       S.lastLesson = (lvlMap[pickLang] || lvlMap.en)[pickLevel] || startId[pickLang];
       var entryIdx = { new: 0, some: 3, mid: 8 }[pickLevel] || 0;

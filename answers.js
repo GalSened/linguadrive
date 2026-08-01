@@ -42,9 +42,10 @@
       html += '<div class="micstage" style="padding:.2rem 0"><button class="micbtn" id="' + p + 'Mic">🎙️</button>' +
         '<div class="small muted" id="' + p + 'Hint">הקש ואמור ב' + activeLang().name + '</div></div>';
     } else if (mode === 'type') {
+      var heTrack = S.settings.lang === 'he';
       html += '<div style="display:flex;gap:.5rem;align-items:center">' +
-        '<input type="text" id="' + p + 'Type" dir="ltr" autocomplete="off" autocapitalize="none" spellcheck="false" ' +
-        'placeholder="' + (S.settings.lang === 'es' ? 'escribe aquí…' : 'type here…') + '" style="flex:1">' +
+        '<input type="text" id="' + p + 'Type" dir="' + (heTrack ? 'rtl' : 'ltr') + '" autocomplete="off" autocapitalize="none" spellcheck="false" ' +
+        'placeholder="' + (heTrack ? 'הקלד כאן…' : S.settings.lang === 'es' ? 'escribe aquí…' : 'type here…') + '" style="flex:1">' +
         '<button class="btn primary" id="' + p + 'TypeGo" style="flex:none">בדוק</button></div>' +
         '<div class="small muted" style="margin-top:.3rem;text-align:center">אפשר גם Enter · ' +
         (difficulty().typedExact ? '🎯 מצב מדויק: שגיאת כתיב נחשבת טעות' : 'לא רגיש לאותיות גדולות/קטנות או ניקוד') + '</div>';

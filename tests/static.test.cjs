@@ -16,7 +16,7 @@ const workflow = fs.readFileSync('.github/workflows/deploy.yml', 'utf8');
   .forEach(id => ok(html.includes('id="' + id + '"'), 'html has #' + id));
 
 // script order: logic → merge → content packs → banks → cloud config → backend → sync → app → vocab → account
-const SCRIPTS = ['logic.js','merge.js','content.js','content-es.js','content-bank.js','content-bank-es.js','audio-manifest.js','cloud-config.js','backend.js','sync.js','app.js','voice.js','answers.js','vocab.js','account.js','league.js'];
+const SCRIPTS = ['logic.js','merge.js','content.js','content-es.js','content-bank.js','content-bank-es.js','content-he.js','content-bank-he.js','audio-manifest.js','cloud-config.js','backend.js','sync.js','app.js','voice.js','answers.js','vocab.js','account.js','league.js'];
 const order = SCRIPTS.map(f => html.indexOf('src="' + f + '"'));
 ok(order.every(i => i > -1), 'all ' + SCRIPTS.length + ' scripts referenced');
 ok(order.every((v, i) => i === 0 || order[i - 1] < v), 'script order correct');
@@ -34,7 +34,7 @@ ok(!html.includes('data-nav="srs"'), 'old srs nav replaced by words hub');
 // every sw SHELL entry exists on disk
 const shell = sw.match(/var SHELL = \[([\s\S]*?)\];/)[1].match(/'([^']+)'/g).map(s => s.slice(1, -1));
 shell.forEach(f => ok(f === '.' || fs.existsSync(f), 'sw shell file exists: ' + f));
-['merge.js','backend.js','sync.js','vocab.js','account.js','answers.js','cloud-config.js','content-bank.js','content-bank-es.js','audio-manifest.js','voice.js','league.js']
+['merge.js','backend.js','sync.js','vocab.js','account.js','answers.js','cloud-config.js','content-bank.js','content-bank-es.js','content-he.js','content-bank-he.js','audio-manifest.js','voice.js','league.js']
   .forEach(f => ok(shell.includes(f), 'sw shell includes ' + f));
 ok(!shell.some(f => f.indexOf('audio/') === 0), 'mp3s are NOT precached (runtime-cached on demand)');
 
@@ -43,8 +43,8 @@ const man = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
 man.icons.forEach(i => ok(fs.existsSync(i.src), 'manifest icon exists: ' + i.src));
 
 // version discipline: bump both together
-ok(app.includes("var APP_VERSION = '2.7.1'"), 'app version 2.7.1');
-ok(sw.includes('linguadrive-v2.7.1'), 'sw cache version bumped in lockstep');
+ok(app.includes("var APP_VERSION = '2.8.0'"), 'app version 2.8.0');
+ok(sw.includes('linguadrive-v2.8.0'), 'sw cache version bumped in lockstep');
 
 // v2.7.1: competitiveness — tickets, ghost race, chase framing, challenge shares
 ok(app.includes('Turbo.TICKETS'), 'turbo ticket cap defined');
@@ -59,6 +59,14 @@ ok(leagueSrc.includes('בעקבותיך'), 'league chase framing (rival below)')
 ok(leagueSrc.includes('lastRank'), 'overtake detection state');
 ok(fs.readFileSync('merge.js', 'utf8').includes('turboAttempts'), 'merge carries tickets');
 ok(fs.readFileSync('merge.js', 'utf8').includes('turboCurve'), 'merge carries ghost curves');
+
+// v2.8.0: Hebrew-enrichment track (עברית גבוהה)
+ok(app.includes("he: { code: 'he'"), 'LANGS.he registered');
+ok(app.includes('VOCAB_BANK_HE'), 'bankOf resolves the Hebrew bank');
+ok(app.includes("startId = { en: 'l1', es: 's1', he: 'h1' }"), 'onboarding start ids include he');
+ok(app.includes("classList.toggle('lang-he'"), 'RTL flip class applied on lang switch');
+ok(html.includes('body.lang-he .en'), 'lang-he typography override present');
+ok(html.includes('content-he.js') && html.includes('content-bank-he.js'), 'Hebrew packs loaded');
 
 // v2.7.0: weekly micro-league — client-computed cohorts over the shared scores table
 const league = fs.readFileSync('league.js', 'utf8');

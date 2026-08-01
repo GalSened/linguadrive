@@ -64,6 +64,13 @@ input,select{font-family:inherit;font-size:1rem}
 @keyframes viewin{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 #view.vin{animation:viewin .26s ease both}
 [dir="ltr"],.en{font-family:var(--road);direction:ltr}
+/* עברית גבוהה: היעד הוא עברית — מחזירים את הטיפוגרפיה של שדות היעד ל-RTL */
+body.lang-he .en,body.lang-he .ven,body.lang-he .qopt.en,body.lang-he .gex .en,
+body.lang-he .signcard .en-line,body.lang-he .flash .back .bigword,body.lang-he .words,
+body.lang-he #carPrompt .en,body.lang-he .heardline{
+  font-family:var(--hebrew);direction:rtl;text-align:right}
+body.lang-he .signcard .en-line{text-align:right}
+body.lang-he .scorenum{direction:ltr}
 h1,h2{font-family:var(--display);font-weight:400;letter-spacing:.01em}
 .hide{display:none!important}
 
@@ -449,6 +456,8 @@ html[dir="ltr"] .switch input:checked + .sldr::before{transform:translateX(20px)
 <script src="content-es.js"></script>
 <script src="content-bank.js"></script>
 <script src="content-bank-es.js"></script>
+<script src="content-he.js"></script>
+<script src="content-bank-he.js"></script>
 <script src="audio-manifest.js"></script>
 <script src="cloud-config.js"></script>
 <script src="backend.js"></script>

@@ -1,5 +1,5 @@
 'use strict';
-const packs = { en: require('../content.js'), es: require('../content-es.js') };
+const packs = { en: require('../content.js'), es: require('../content-es.js'), he: require('../content-he.js') };
 let pass = 0, fail = 0;
 function ok(cond, name) { if (cond) pass++; else { fail++; console.log('  ✗ FAIL:', name); } }
 
@@ -54,6 +54,9 @@ for (const [code, C] of Object.entries(packs)) {
 // cross-pack sanity: distinct lesson id prefixes
 ok(packs.en.lessons.every(l => l.id[0] === 'l'), 'EN ids start with l');
 ok(packs.es.lessons.every(l => l.id[0] === 's'), 'ES ids start with s');
+ok(packs.he.lessons.every(l => l.id[0] === 'h'), 'HE ids start with h');
+// Hebrew-enrichment track: target fields must be HEBREW (high register), prompts Hebrew too
+ok(packs.he.lessons.every(l => l.vocab.every(v => /[א-ת]/.test(v.en) && /[א-ת]/.test(v.he))), 'HE vocab: both fields Hebrew');
 
 console.log(fail === 0 ? '  ✅ content: ' + pass + ' passed' : '  ❌ content: ' + fail + ' failed / ' + (pass + fail));
 process.exitCode = fail ? 1 : 0;

@@ -9,17 +9,20 @@ const EXPECTED_TOPICS = ['food','family','work','travel','shopping','health','ho
 
 const EN = require(path.join(__dirname, '..', 'content-bank.js'));
 const ES = require(path.join(__dirname, '..', 'content-bank-es.js'));
+const HE = require(path.join(__dirname, '..', 'content-bank-he.js'));
 
 /* exclusion lists = every word already taught in the lessons */
 const ctx = { window: {} };
 vm.createContext(ctx);
-for (const f of ['content.js', 'content-es.js'])
+for (const f of ['content.js', 'content-es.js', 'content-he.js'])
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
 const packEn = ctx.window.CONTENT_EN || ctx.CONTENT_EN;
 const packEs = ctx.window.CONTENT_ES || ctx.CONTENT_ES;
+const packHe = ctx.window.CONTENT_HE || ctx.CONTENT_HE;
 const excl = {
   en: packEn.lessons.flatMap(l => l.vocab.map(v => v.en)),
-  es: packEs.lessons.flatMap(l => l.vocab.map(v => v.en))
+  es: packEs.lessons.flatMap(l => l.vocab.map(v => v.en)),
+  he: packHe.lessons.flatMap(l => l.vocab.map(v => v.en))
 };
 
 let errors = 0;
@@ -84,6 +87,7 @@ function checkBank(bank, name, lang, exclList) {
 
 checkBank(EN, 'content-bank.js', 'en', excl.en);
 checkBank(ES, 'content-bank-es.js', 'es', excl.es);
+checkBank(HE, 'content-bank-he.js', 'he', excl.he);
 
 // Global names sanity (loaded via globalThis in Node)
 if (!globalThis.VOCAB_BANK_EN || globalThis.VOCAB_BANK_EN !== EN) fail('VOCAB_BANK_EN global not set correctly');

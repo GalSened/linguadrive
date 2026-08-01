@@ -53,6 +53,7 @@ async function until(fn, ms, name) {
   /* ---- load scripts in order (as real Scripts, not eval) ---- */
   const ctx = dom.getInternalVMContext();
   for (const f of ['logic.js', 'merge.js', 'content.js', 'content-es.js', 'content-bank.js', 'content-bank-es.js',
+                   'content-he.js', 'content-bank-he.js',
                    'audio-manifest.js', 'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'voice.js', 'answers.js', 'vocab.js', 'account.js', 'league.js']) {
     vm.runInContext(fs.readFileSync(f, 'utf8'), ctx, { filename: f });
     /* smoke exercises the LOCAL-ONLY path deliberately (cloud path has its own suite: cloud.test) */
@@ -416,6 +417,18 @@ async function until(fn, ms, name) {
   ok($('#setVoice'), 'voice select present');
   $('#testTTS').click(); await sleep(30);
   ok(spokenLog.some(t => t.includes('Hola')), 'ES sample spoken');
+
+  /* 10l. HEBREW-ENRICHMENT track: switch, RTL flip, journey renders, back to ES */
+  w.setAppLang('he', false);
+  ok(w.CONTENT === w.CONTENT_HE, 'active pack switched to HE');
+  ok(d.body.classList.contains('lang-he'), 'lang-he RTL class applied');
+  ok($('#brandPlate').textContent === 'HE·DRIVE', 'brand plate HE');
+  w.location.hash = 'lessons'; w.dispatchEvent(new w.Event('hashchange'));
+  await until(() => $$('#view .mapnode').length === 23, 1500, 'HE journey map renders');
+  ok(w.vocabPool('all').length >= 400, 'HE word universe wide (' + w.vocabPool('all').length + ')');
+  ok(w.bankOf('he') === w.VOCAB_BANK_HE, 'HE bank resolves');
+  w.setAppLang('es', false);
+  ok(!d.body.classList.contains('lang-he'), 'lang-he class removed on switch back');
 
   /* 11b. real-voice layer: manifest resolves, jsdom (no mp3 support) falls back to synth —
      every spokenLog assertion above already proves the fallback carried the whole suite */

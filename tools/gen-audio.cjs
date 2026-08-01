@@ -20,10 +20,13 @@ const crypto = require('crypto');
 const ROOT = path.join(__dirname, '..');
 const Logic = require(path.join(ROOT, 'logic.js'));
 
-/* one voice + model per language, part of the file hash — changing them regenerates cleanly */
+/* one voice + model per language, part of the file hash — changing them regenerates cleanly.
+   he: flash_v2_5 REJECTS Hebrew (probed 2026-08-01: unsupported_language) → multilingual_v2,
+   voiced by Gal's own clone (the podcast project chose it by ear for Hebrew). */
 const PLAN = {
   en: { voice: 'XrExE9yKIg1WjnnlVkGX', name: 'Matilda', model: 'eleven_flash_v2_5', language_code: 'en' },
-  es: { voice: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah', model: 'eleven_flash_v2_5', language_code: 'es' }
+  es: { voice: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah', model: 'eleven_flash_v2_5', language_code: 'es' },
+  he: { voice: 'nBwlhHY26CjUa3imYVjB', name: 'GalClone', model: 'eleven_multilingual_v2' }
 };
 const OUTPUT_FORMAT = 'mp3_44100_64'; /* single words — 64kbps is transparent enough */
 const CONCURRENCY = 3;
@@ -39,21 +42,21 @@ function loadKey() {
 }
 
 /* ---- collect every word the app can ask to hear: lesson vocab + topic banks ---- */
+const LANGS = ['en', 'es', 'he'].filter(lc =>
+  fs.existsSync(path.join(ROOT, lc === 'en' ? 'content.js' : 'content-' + lc + '.js')));
 function collectWords() {
   const ctx = { window: {} };
   vm.createContext(ctx);
-  for (const f of ['content.js', 'content-es.js'])
-    vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f });
-  const packs = {
-    en: ctx.window.CONTENT_EN || ctx.CONTENT_EN,
-    es: ctx.window.CONTENT_ES || ctx.CONTENT_ES
-  };
-  const banks = {
-    en: require(path.join(ROOT, 'content-bank.js')),
-    es: require(path.join(ROOT, 'content-bank-es.js'))
-  };
-  const out = { en: new Map(), es: new Map() }; /* norm → original text (first seen wins) */
-  for (const lang of ['en', 'es']) {
+  for (const lc of LANGS)
+    vm.runInContext(fs.readFileSync(path.join(ROOT, lc === 'en' ? 'content.js' : 'content-' + lc + '.js'), 'utf8'), ctx, { filename: lc });
+  const packs = {}, banks = {};
+  for (const lc of LANGS) {
+    packs[lc] = ctx.window['CONTENT_' + lc.toUpperCase()] || ctx['CONTENT_' + lc.toUpperCase()];
+    banks[lc] = require(path.join(ROOT, lc === 'en' ? 'content-bank.js' : 'content-bank-' + lc + '.js'));
+  }
+  const out = {}; /* norm → original text (first seen wins) */
+  for (const lang of LANGS) {
+    out[lang] = new Map();
     const add = (t) => {
       const n = Logic.normalize(t);
       if (n && !out[lang].has(n)) out[lang].set(n, String(t).trim());
@@ -75,12 +78,11 @@ async function tts(key, lang, text, dest) {
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${p.voice}?output_format=${OUTPUT_FORMAT}`, {
       method: 'POST',
       headers: { 'xi-api-key': key, 'Content-Type': 'application/json', accept: 'audio/mpeg' },
-      body: JSON.stringify({
+      body: JSON.stringify(Object.assign({
         text,
         model_id: p.model,
-        language_code: p.language_code,
         voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-      })
+      }, p.language_code ? { language_code: p.language_code } : {}))
     });
     if (res.ok) {
       const buf = Buffer.from(await res.arrayBuffer());
@@ -105,7 +107,7 @@ async function main() {
   const words = collectWords();
   const jobs = [];
   let existing = 0, chars = 0;
-  for (const lang of ['en', 'es']) {
+  for (const lang of LANGS) {
     const dir = path.join(ROOT, 'audio', lang);
     fs.mkdirSync(dir, { recursive: true });
     for (const [, text] of words[lang]) {
@@ -116,7 +118,7 @@ async function main() {
       chars += [...text].length;
     }
   }
-  console.log(`words: en=${words.en.size} es=${words.es.size} · already on disk: ${existing} · to generate: ${jobs.length} (${chars} chars ≈ ${Math.ceil(chars * 0.5)} credits @flash)`);
+  console.log(`words: ${LANGS.map(l => l + '=' + words[l].size).join(' ')} · already on disk: ${existing} · to generate: ${jobs.length} (${chars} chars)`);
   if (chars > MAX_CHARS) { console.error(`ABORT: ${chars} chars exceeds --max-chars ${MAX_CHARS}`); process.exit(2); }
   if (!GO) { console.log('dry-run only — pass --go to generate.'); writeManifest(words); return; }
 
@@ -140,9 +142,10 @@ async function main() {
 
 /* manifest maps normalized word → filename, ONLY for files actually on disk (honest coverage) */
 function writeManifest(words) {
-  const man = { en: {}, es: {} };
+  const man = {};
   let count = 0;
-  for (const lang of ['en', 'es']) {
+  for (const lang of LANGS) {
+    man[lang] = {};
     for (const [norm, text] of words[lang]) {
       const f = fileFor(lang, text);
       const p = path.join(ROOT, 'audio', lang, f);
