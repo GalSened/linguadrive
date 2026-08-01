@@ -168,11 +168,13 @@
   }
 
   /* typed answers: stricter than voice (no ASR noise to forgive) — exact normalized match,
-     or >=85 alignment for long answers (tolerates one small typo, not a different word) */
-  function typedMatch(target, typed, lang) {
+     or >=85 alignment for long answers (tolerates one small typo, not a different word).
+     strict (hard/expert difficulty): exact normalized only — typos count. */
+  function typedMatch(target, typed, lang, strict) {
     var tN = normalize(target, lang), sN = normalize(typed, lang);
     if (!sN) return { ok: false, score: 0 };
     if (tN === sN) return { ok: true, score: 100 };
+    if (strict) { var rs = alignScore(target, typed, lang); return { ok: false, score: rs.score }; }
     var r = alignScore(target, typed, lang);
     return { ok: r.score >= 85, score: r.score };
   }
@@ -188,6 +190,64 @@
       seen[k] = 1; out.push(pool[i]);
     }
     return out;
+  }
+
+  /* letter-bigram Dice similarity — cheap "looks/sounds alike" for single words.
+     (named bigramSim: `similarity` above is the char-Levenshtein used by wordsMatch) */
+  function bigramSim(a, b) {
+    a = normalize(String(a)); b = normalize(String(b));
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    var grams = function (s) {
+      var g = {}; s = '^' + s + '$';
+      for (var i = 0; i < s.length - 1; i++) { var k = s.slice(i, i + 2); g[k] = (g[k] || 0) + 1; }
+      return g;
+    };
+    var ga = grams(a), gb = grams(b), inter = 0, ta = 0, tb = 0, k;
+    for (k in ga) { ta += ga[k]; if (gb[k]) inter += Math.min(ga[k], gb[k]); }
+    for (k in gb) tb += gb[k];
+    return (2 * inter) / (ta + tb);
+  }
+
+  /* hard mode: distractors RANKED by similarity to the target — "though/through/thought"
+     instead of three random giveaways. Deliberately harder to eliminate by shape. */
+  function pickDistractorsHard(pool, targetEn, n, keyOf) {
+    keyOf = keyOf || function (x) { return x && x.en; };
+    var tN = normalize(String(targetEn));
+    var seen = {}; seen[tN] = 1;
+    var scored = [];
+    for (var i = 0; i < (pool || []).length; i++) {
+      var k = normalize(String(keyOf(pool[i]) || ''));
+      if (!k || seen[k]) continue;
+      seen[k] = 1;
+      scored.push({ it: pool[i], s: bigramSim(tN, k) });
+    }
+    scored.sort(function (a, b) { return b.s - a.s; });
+    return scored.slice(0, n || 3).map(function (x) { return x.it; });
+  }
+
+  /* ---------- difficulty tiers (Gal 2026-08-01: the game must get HARDER as you grow) ----------
+     Pure tables so every surface reads one source of truth; 'auto' resolves by player level. */
+  function diffParams(mode) {
+    if (mode === 'hard') return {
+      key: 'hard', he: 'קשה', icon: '🎯',
+      passScore: 75, srsPass: 80, typedExact: true, choices: 4, hardDistractors: true,
+      turboVoiceMs: 5000, turboTypeMs: 9000, quizSec: 12, xpMult: 1.25
+    };
+    if (mode === 'expert') return {
+      key: 'expert', he: 'מומחה', icon: '🏆',
+      passScore: 85, srsPass: 85, typedExact: true, choices: 6, hardDistractors: true,
+      turboVoiceMs: 4000, turboTypeMs: 7000, quizSec: 8, xpMult: 1.5
+    };
+    return {
+      key: 'normal', he: 'רגיל', icon: '🙂',
+      passScore: 60, srsPass: 70, typedExact: false, choices: 4, hardDistractors: false,
+      turboVoiceMs: 6500, turboTypeMs: 12000, quizSec: 0, xpMult: 1
+    };
+  }
+  var DIFF_UNLOCK = { hard: 3, expert: 6 }; /* levels where the harder tiers open */
+  function autoDifficulty(level) {
+    return level >= DIFF_UNLOCK.expert ? 'expert' : level >= DIFF_UNLOCK.hard ? 'hard' : 'normal';
   }
 
   // ---------- SRS (Leitner) ----------
@@ -321,6 +381,11 @@
     grade: grade,
     typedMatch: typedMatch,
     pickDistractors: pickDistractors,
+    pickDistractorsHard: pickDistractorsHard,
+    bigramSim: bigramSim,
+    diffParams: diffParams,
+    autoDifficulty: autoDifficulty,
+    DIFF_UNLOCK: DIFF_UNLOCK,
     BOX_INTERVALS_DAYS: BOX_INTERVALS_DAYS,
     newCard: newCard,
     reviewCard: reviewCard,

@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.5.0';
+var APP_VERSION = '2.6.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -82,14 +82,16 @@ var DEFAULTS = {
     turboPool: 'learned',   // learned | all — how wide the Turbo word pool is
     turboInput: 'voice',    // voice | type — Turbo answer channel (forced to type without STT)
     pracDir: 'produce',     // produce (he → target) | listen (hear target → pick meaning)
+    difficulty: 'auto',     // auto | normal | hard | expert — auto climbs with player level
     dailyGoal: 15, onDevice: false
   },
   lessons: {}, srs: {}, log: {}, lastLesson: '',
   xp: 0, ach: {}, quests: null, boss: {}, best: {},
   vehicle: '🚗', daily: null, dailyStreak: 0, lastDaily: '', freeRoam: false, entry: { en: 0, es: 0 },
-  counters: { drills: 0, listens: 0, srs: 0, quizPerfects: 0, dialogues: 0, clinicHits: 0, minutes: 0, langs: {} },
+  counters: { drills: 0, listens: 0, srs: 0, quizPerfects: 0, dialogues: 0, clinicHits: 0, minutes: 0, hardHits: 0, langs: {} },
   recent: { turbo: [], car: [], vocab: [] },   // anti-repetition MRU windows (per practice mode)
   weak: {},                                    // '{lang}:{norm-en}' → {n misses, s hit-streak, t ts}
+  spares: 0,                                   // 🛞 streak insurance (max 2) — earned by finishing all daily quests
   meta: { updatedAt: 0, settingsAt: 0 }        // cloud-sync LWW timestamps
 };
 var S = load();
@@ -114,6 +116,7 @@ function load() {
     Object.keys(rec).forEach(function (k) { if (!Array.isArray(rec[k])) rec[k] = []; });
     s.recent = rec;
     s.weak = (s.weak && typeof s.weak === 'object' && !Array.isArray(s.weak)) ? s.weak : {};
+    s.spares = Math.max(0, Math.min(2, +s.spares || 0));
     return Object.assign(d, s, { settings: s.settings });
   } catch (e) { return JSON.parse(JSON.stringify(DEFAULTS)); }
 }
@@ -227,6 +230,7 @@ function weakKey(en) {
 }
 function noteWordResult(en, hit) {
   try {
+    if (hit && difficulty().key !== 'normal') S.counters.hardHits = (S.counters.hardHits || 0) + 1;
     var k = weakKey(en);
     if (!k) return;
     if (!S.weak) S.weak = {};
@@ -461,6 +465,8 @@ function render() {
   var r = currentRoute(), parts = r.split('/');
   var fn = ROUTES[parts[0]] || ROUTES.home;
   window.scrollTo(0, 0);
+  var vw = $('#view');
+  if (vw) { vw.classList.remove('vin'); void vw.offsetWidth; vw.classList.add('vin'); }
   fn(parts[1]);
   $$('#bottomnav button').forEach(function (b) {
     var k = b.getAttribute('data-nav');
@@ -498,6 +504,15 @@ $$('#bottomnav button').forEach(function (b) {
 });
 function updateBadges() {
   $('#streakNum').textContent = Logic.computeStreak(S.log, Date.now());
+  var sw2 = $('#spareWrap'), sn = $('#spareNum');
+  if (sw2 && sn) { sn.textContent = S.spares || 0; sw2.classList.toggle('hide', !(S.spares > 0)); }
+  var dc = $('#diffChip');
+  if (dc) {
+    var d = difficulty();
+    dc.textContent = d.icon + ' ' + d.he;
+    dc.className = 'diffchip ' + d.key;
+    dc.title = 'רמת קושי — שינוי בהגדרות';
+  }
   var due = dueCards().length;
   var badge = $('#srsBadge');
   badge.textContent = due > 99 ? '99+' : due;
@@ -566,8 +581,16 @@ async function shareText(txt) {
   } catch (e) { toast('לא הצלחתי לשתף'); }
 }
 function appUrl() { return (location.origin.indexOf('http') === 0 ? location.origin + location.pathname : ''); }
+
+/* one source of truth for how hard the game plays right now (Gal: it must get HARDER) */
+function difficulty() {
+  var m = S.settings.difficulty || 'auto';
+  if (m === 'auto') m = Logic.autoDifficulty(Logic.levelInfo(S.xp).level);
+  return Logic.diffParams(m);
+}
 function addXp(amount) {
   if (!amount) return;
+  amount = Math.max(1, Math.round(amount * difficulty().xpMult));
   var before = Logic.levelInfo(S.xp).level;
   S.xp += amount;
   var after = Logic.levelInfo(S.xp).level;
@@ -575,6 +598,11 @@ function addXp(amount) {
     var r = Logic.rankFor(after);
     fanfare(); confetti();
     toast('🎉 עלית רמה ' + after + '! ' + r[0] + ' ' + r[1]);
+    /* tier unlocks are the progression arc: the road itself gets steeper */
+    if (before < Logic.DIFF_UNLOCK.hard && after >= Logic.DIFF_UNLOCK.hard)
+      setTimeout(function () { toast('🎯 נפתחה רמת קושי "קשה" — מסיחים דומים, פחות זמן, יותר XP'); }, 2400);
+    if (before < Logic.DIFF_UNLOCK.expert && after >= Logic.DIFF_UNLOCK.expert)
+      setTimeout(function () { toast('🏆 נפתחה רמת "מומחה" — 6 תשובות, אפס סלחנות, XP כפול וחצי'); }, 2400);
   }
   save();
 }
@@ -613,9 +641,36 @@ function questProgress(measure, n) {
     }
   });
   if (q.list.length && q.list.every(function (i) { return i.done; }) && !q.bonus) {
-    q.bonus = true; addXp(50); fanfare(); toast('🌟 כל המשימות היומיות הושלמו! +50');
+    q.bonus = true; addXp(50); fanfare();
+    /* streak insurance is EARNED, not given — the daily loop feeds the loss-aversion asset */
+    if ((S.spares || 0) < 2) {
+      S.spares = (S.spares || 0) + 1;
+      toast('🌟 כל המשימות הושלמו! +50 · הרווחת 🛞 צמיג רזרבי (' + S.spares + '/2) — שומר על הרצף ביום שתפספס');
+    } else toast('🌟 כל המשימות היומיות הושלמו! +50');
   }
   if (changed) save();
+}
+
+/* a missed day eats a spare tire instead of the streak — applied on boot, whole-gap only */
+function applySpares() {
+  try {
+    if (!S.spares) return;
+    var d = new Date(); d.setDate(d.getDate() - 1);
+    var gap = [];
+    for (var i = 0; i < 60; i++) {
+      var k = Logic.dayKey(d.getTime());
+      var e = S.log[k];
+      if (e && ((e.items || 0) > 0 || (e.min || 0) > 0)) break;  /* reached the streak tail */
+      gap.push(k);
+      d.setDate(d.getDate() - 1);
+    }
+    if (!gap.length || gap.length >= 60) return;   /* nothing missed, or no streak to save */
+    if (gap.length > S.spares) return;             /* can't cover the whole gap — streak is gone */
+    gap.forEach(function (k) { S.log[k] = { min: 0, items: 1, frozen: 1 }; });
+    S.spares -= gap.length;
+    save();
+    setTimeout(function () { toast('🛞 הצמיג הרזרבי הציל את הרצף! (' + gap.length + (gap.length === 1 ? ' יום' : ' ימים') + ')'); }, 900);
+  } catch (e) { }
 }
 
 var ACH_DEFS = [
@@ -634,7 +689,9 @@ var ACH_DEFS = [
   { id: 'turbo300', icon: '🚀', he: 'טורבו 300', d: '300 נקודות בסבב טורבו', c: function () { var m = 0; Object.keys(S.best).forEach(function (k) { m = Math.max(m, S.best[k]); }); return m >= 300; } },
   { id: 'hour1', icon: '⏱️', he: 'שעת דרך', d: '60 דקות למידה מצטברות', c: function () { return S.counters.minutes >= 60; } },
   { id: 'challenger', icon: '🗞️', he: 'מתמודד', d: 'השלמת אתגר יומי ראשון', c: function () { return !!S.lastDaily; } },
-  { id: 'daily7', icon: '📮', he: 'מנוי שבועי', d: '7 ימי אתגר יומי ברצף', c: function () { return S.dailyStreak >= 7; } }
+  { id: 'daily7', icon: '📮', he: 'מנוי שבועי', d: '7 ימי אתגר יומי ברצף', c: function () { return S.dailyStreak >= 7; } },
+  { id: 'streak100', icon: '💎', he: 'מאה ימים על הכביש', d: '100 ימים ברצף', c: function () { return Logic.computeStreak(S.log, Date.now()) >= 100; } },
+  { id: 'hardboiled', icon: '🎯', he: 'קשוח', d: '25 תשובות נכונות במצב קשה ומעלה', c: function () { return (S.counters.hardHits || 0) >= 25; } }
 ];
 function checkAch() {
   ACH_DEFS.forEach(function (a) {
@@ -940,25 +997,42 @@ ROUTES.boss = function (nStr) {
   }
   var q = run.qs[run.i];
   Boss.cur = q;
+  var bd = difficulty();
   html += laneProgress(run.i, run.qs.length) +
     '<div class="card"><div class="small muted" style="margin-bottom:.4rem">שאלה ' + (run.i + 1) + ' / ' + run.qs.length + ' · צדקת ב-' + run.right + '</div>' +
     '<h2 style="font-size:1.15rem;line-height:1.5">' + esc(q.q) + '</h2></div>' +
+    (bd.quizSec ? '<div class="qtimer"><i id="qTimeFill"></i></div>' : '') +
     '<div id="qOpts">' + q.o.map(function (o, oi) { return '<button class="qopt" data-i="' + oi + '">' + esc(o) + '</button>'; }).join('') + '</div>' +
     '<div id="qFb"></div>';
   $('#view').innerHTML = html;
-  $$('#qOpts .qopt').forEach(function (b) {
-    b.addEventListener('click', function () {
-      if ($('#qNext')) return;
-      var oi = +b.getAttribute('data-i'), okAns = oi === q.a;
-      if (okAns) { run.right++; Beep.good(); } else Beep.bad();
-      $$('#qOpts .qopt').forEach(function (x, xi) {
-        x.classList.add(xi === q.a ? 'right' : (xi === oi ? 'wrong' : 'dim'));
-        x.disabled = true;
-      });
-      $('#qFb').innerHTML = '<div class="card" style="margin-top:.6rem"><b>' + (okAns ? '✓ נכון!' : '✗ התשובה: ' + esc(q.o[q.a])) + '</b> <span class="small muted">' + esc(q.ex) + '</span></div>' +
-        '<button class="btn big primary" id="qNext" style="margin-top:.6rem">' + (run.i + 1 >= run.qs.length ? 'לתוצאה ›' : 'הבא ›') + '</button>';
-      $('#qNext').addEventListener('click', function () { run.i++; ROUTES.boss(String(n)); });
+  var bTimer = null;
+  function stopBTimer() { if (bTimer) { clearInterval(bTimer); bTimer = null; } }
+  function bossAnswer(oi) {
+    if ($('#qNext')) return;
+    stopBTimer();
+    var okAns = oi === q.a;
+    if (okAns) { run.right++; Beep.good(); } else Beep.bad();
+    $$('#qOpts .qopt').forEach(function (x, xi) {
+      x.classList.add(xi === q.a ? 'right' : (xi === oi ? 'wrong' : 'dim'));
+      x.disabled = true;
     });
+    $('#qFb').innerHTML = '<div class="card" style="margin-top:.6rem"><b>' + (okAns ? '✓ נכון!' : (oi < 0 ? '⌛ נגמר הזמן! התשובה: ' : '✗ התשובה: ') + (okAns ? '' : esc(q.o[q.a]))) + '</b> <span class="small muted">' + esc(q.ex) + '</span></div>' +
+      '<button class="btn big primary" id="qNext" style="margin-top:.6rem">' + (run.i + 1 >= run.qs.length ? 'לתוצאה ›' : 'הבא ›') + '</button>';
+    $('#qNext').addEventListener('click', function () { run.i++; ROUTES.boss(String(n)); });
+  }
+  if (bd.quizSec) {
+    var bEnd = Date.now() + bd.quizSec * 1000;
+    bTimer = setInterval(function () {
+      var fill = document.getElementById('qTimeFill');
+      if (!fill) return stopBTimer();
+      var leftMs = bEnd - Date.now();
+      fill.style.width = Math.max(0, 100 * leftMs / (bd.quizSec * 1000)) + '%';
+      fill.classList.toggle('low', leftMs < 4000);
+      if (leftMs <= 0) bossAnswer(-1);
+    }, 120);
+  }
+  $$('#qOpts .qopt').forEach(function (b) {
+    b.addEventListener('click', function () { bossAnswer(+b.getAttribute('data-i')); });
   });
 };
 
@@ -1138,28 +1212,46 @@ function renderQuiz(l, box) {
   }
   var q = l.quiz[run.i];
   var isEnOpts = /[a-z]/i.test(q.o.join(''));
+  var qd = difficulty();
   box.innerHTML = '<div class="card"><div class="kicker">שאלה ' + (run.i + 1) + ' / ' + l.quiz.length + '</div>' +
     '<h2 style="direction:' + (/[א-ת]/.test(q.q) ? 'rtl' : 'ltr') + ';text-align:' + (/[א-ת]/.test(q.q) ? 'right' : 'left') + '" class="' + (/[א-ת]/.test(q.q) ? '' : 'en') + '">' + esc(q.q) + '</h2></div>' +
+    (qd.quizSec ? '<div class="qtimer"><i id="qTimeFill"></i></div>' : '') +
     '<div id="qOpts">' + q.o.map(function (o, oi) {
       var en = !/[א-ת]/.test(o);
       return '<button class="qopt ' + (en ? 'en' : '') + '" data-oi="' + oi + '">' + esc(o) + '</button>';
     }).join('') + '</div><div id="qFb"></div>';
-  $$('#qOpts .qopt').forEach(function (b) {
-    b.addEventListener('click', function () {
-      if (run.answered) return;
-      run.answered = true;
-      var oi = +b.getAttribute('data-oi');
-      var ok = oi === q.a;
-      if (ok) { run.right++; Beep.good(); } else Beep.bad();
-      $$('#qOpts .qopt').forEach(function (x, xi) {
-        if (xi === q.a) x.classList.add('right');
-        else if (xi === oi) x.classList.add('wrong');
-      });
-      $('#qFb').innerHTML = '<div class="qexplain">' + (ok ? '✅ ' : '💡 ') + esc(q.ex) + '</div>' +
-        '<button class="btn big primary" id="qNext">' + (run.i === l.quiz.length - 1 ? 'לתוצאה' : 'הבא ›') + '</button>';
-      logActivity(1, 0);
-      $('#qNext').addEventListener('click', function () { run.i++; run.answered = false; renderQuiz(l, box); });
+  var qTimer = null;
+  function stopQTimer() { if (qTimer) { clearInterval(qTimer); qTimer = null; } }
+  /* oi === -1 → the clock ran out (hard/expert): counts as a wrong answer */
+  function answer(oi) {
+    if (run.answered) return;
+    stopQTimer();
+    run.answered = true;
+    var ok = oi === q.a;
+    if (ok) { run.right++; Beep.good(); } else Beep.bad();
+    $$('#qOpts .qopt').forEach(function (x, xi) {
+      if (xi === q.a) x.classList.add('right');
+      else if (xi === oi) x.classList.add('wrong');
+      x.disabled = true;
     });
+    $('#qFb').innerHTML = '<div class="qexplain">' + (ok ? '✅ ' : (oi < 0 ? '⌛ נגמר הזמן! ' : '💡 ')) + esc(q.ex) + '</div>' +
+      '<button class="btn big primary" id="qNext">' + (run.i === l.quiz.length - 1 ? 'לתוצאה' : 'הבא ›') + '</button>';
+    logActivity(1, 0);
+    $('#qNext').addEventListener('click', function () { run.i++; run.answered = false; renderQuiz(l, box); });
+  }
+  if (qd.quizSec) {
+    var qEnd = Date.now() + qd.quizSec * 1000;
+    qTimer = setInterval(function () {
+      var fill = document.getElementById('qTimeFill');
+      if (!fill) return stopQTimer();               /* navigated away — self-cancel */
+      var leftMs = qEnd - Date.now();
+      fill.style.width = Math.max(0, 100 * leftMs / (qd.quizSec * 1000)) + '%';
+      fill.classList.toggle('low', leftMs < 4000);
+      if (leftMs <= 0) answer(-1);
+    }, 120);
+  }
+  $$('#qOpts .qopt').forEach(function (b) {
+    b.addEventListener('click', function () { answer(+b.getAttribute('data-oi')); });
   });
 }
 
@@ -1314,7 +1406,7 @@ ROUTES.srs = function () {
       m.classList.remove('listening');
       if (!res.ok) { $('#srsScore').innerHTML = '<span class="small muted">' + sttErrorHe(res.error) + '</span>'; return; }
       var r = Logic.bestScore(w.en, res.alts);
-      var ok = r.score >= 70;
+      var ok = r.score >= difficulty().srsPass;
       $('#srsScore').innerHTML = '<div class="scorenum ' + Logic.grade(r.score) + '">' + r.score + '%</div>';
       await sleep(800);
       gradeCard(ok);
@@ -1805,23 +1897,24 @@ Turbo.loop = async function () {
       Beep.go();
       var typedMode = Turbo.inputMode() === 'type';
       Car.setState(typedMode ? '⌨️ עכשיו!' : '🎤 עכשיו!', !typedMode);
+      var diff = difficulty();
       var r = null;   /* null = no answer (timeout/noise); else {ok:boolean, score:number} */
       if (typedMode) {
-        var ta = await Turbo.typedAnswer(Math.max(2500, Math.min(12000, Turbo.endAt - Date.now())));
+        var ta = await Turbo.typedAnswer(Math.max(2500, Math.min(diff.turboTypeMs, Turbo.endAt - Date.now())));
         if (!Car.active || Car.gen !== g) return;
         if (ta.cmd === 'repeat') continue;
         if (ta.cmd === 'slow') { try { await TTS.speak(item.en, { rate: 0.7 }); } catch (e) { } Turbo.idx++; continue; }
         if (ta.cmd === 'skip') { Turbo.combo = 0; Turbo.comboLane(); Turbo.idx++; continue; }
-        if (ta.typed) { var tm = Logic.typedMatch(item.en, ta.typed); r = { ok: tm.ok, score: tm.score }; }
+        if (ta.typed) { var tm = Logic.typedMatch(item.en, ta.typed, undefined, diff.typedExact); r = { ok: tm.ok, score: tm.score }; }
       } else {
-        var res = await STT.listen({ timeout: Math.max(1500, Math.min(6500, Turbo.endAt - Date.now())) });
+        var res = await STT.listen({ timeout: Math.max(1500, Math.min(diff.turboVoiceMs, Turbo.endAt - Date.now())) });
         if (!Car.active || Car.gen !== g) return;
         var cmd = matchCmd(res.alts);
         if (cmd === 'stop') { Car.pauseToggle(); continue; }
         if (cmd === 'repeat') continue;
         if (cmd === 'slow') { try { await TTS.speak(item.en, { rate: 0.7 }); } catch (e) { } Turbo.idx++; continue; }
         if (cmd === 'skip') { Turbo.combo = 0; Turbo.comboLane(); Turbo.idx++; continue; }
-        if (res.ok) { var bs = Logic.bestScore(item.en, res.alts); r = { ok: bs.score >= 60, score: bs.score }; }
+        if (res.ok) { var bs = Logic.bestScore(item.en, res.alts); r = { ok: bs.score >= diff.passScore, score: bs.score }; }
       }
       if (r) {
         noteWordResult(item.en, r.ok);
@@ -1830,16 +1923,21 @@ Turbo.loop = async function () {
           var gain = Logic.turboGain(Turbo.combo);
           Turbo.score += gain;
           if (Turbo.combo === 1) Beep.good(); else comboBeep(Turbo.combo);
-          $('#carScore').innerHTML = Turbo.score + ' <span class="small" style="color:var(--ok)">+' + gain + '</span>';
+          var cs = $('#carScore');
+          cs.innerHTML = Turbo.score + ' <span class="small" style="color:var(--ok)">+' + gain + '</span>';
+          cs.classList.remove('pop'); void cs.offsetWidth; cs.classList.add('pop');
+          $('#carScreen').classList.toggle('combo-hot', Turbo.combo >= 5);
           Car.setState('✓ ' + esc(item.en));
         } else {
           Turbo.combo = 0;
+          $('#carScreen').classList.remove('combo-hot');
           Beep.bad();
           Car.setState('✗ ' + esc(item.en));
           try { await TTS.speak(item.en, { rate: 1.05 }); } catch (e) { }
         }
       } else {
         Turbo.combo = 0; Beep.tick();
+        $('#carScreen').classList.remove('combo-hot');
         Car.setState('⏭ ' + esc(item.en));
       }
       Turbo.comboLane();
@@ -1891,11 +1989,16 @@ var VEHICLES = [
   { e: '🚁', he: 'מעל הפקקים', lvl: 9 },
   { e: '🚀', he: 'רקטת טורבו', ach: 'turbo300' },
   { e: '🛸', he: 'צלחת מעופפת', lvl: 10 },
-  { e: '🦄', he: 'חד-קרן אגדי', ach: 'streak30' }
+  { e: '🦄', he: 'חד-קרן אגדי', ach: 'streak30' },
+  /* streak-milestone vehicles — the garage is the streak's trophy room */
+  { e: '🚙', he: 'ג׳יפ ההתמדה', streak: 7 },
+  { e: '🚚', he: 'משאית המרתון', streak: 30 },
+  { e: '🛩️', he: 'מטוס המאה', streak: 100 }
 ];
 function vehicleUnlocked(v) {
   if (v.lvl) return Logic.levelInfo(S.xp).level >= v.lvl;
   if (v.ach) return !!S.ach[v.ach];
+  if (v.streak) return Logic.computeStreak(S.log, Date.now()) >= v.streak;
   return false;
 }
 ROUTES.garage = function () {
@@ -1906,7 +2009,7 @@ ROUTES.garage = function () {
     '<div class="garage">' +
     VEHICLES.map(function (v, i) {
       var open = vehicleUnlocked(v), sel = S.vehicle === v.e;
-      var need = v.lvl ? 'רמה ' + v.lvl : (ACH_DEFS.filter(function (a) { return a.id === v.ach; })[0] || {}).he || '';
+      var need = v.lvl ? 'רמה ' + v.lvl : v.streak ? 'רצף ' + v.streak + ' ימים' : (ACH_DEFS.filter(function (a) { return a.id === v.ach; })[0] || {}).he || '';
       return '<button class="gcar ' + (sel ? 'sel' : '') + (open ? '' : ' lock') + '" data-veh="' + i + '" ' + (open ? '' : 'disabled') + '>' +
         '<span>' + (open ? v.e : '🔒') + '</span><small>' + (open ? esc(v.he) : esc(need)) + '</small>' +
         (sel ? '<small style="color:var(--lane)">✓ נבחר</small>' : '') + '</button>';
@@ -2132,8 +2235,26 @@ ROUTES.settings = function () {
   var s = S.settings, lc = s.lang;
   var voices = TTS.targetVoices(lc);
   var onDeviceAvail = SR && typeof SR.available === 'function';
+  var lvl = Logic.levelInfo(S.xp).level;
+  var dCur = difficulty();
+  var dTiers = [
+    ['auto', '🧭 אוטומטי', 0, 'עולה עם הרמה שלך (עכשיו: ' + dCur.he + ')'],
+    ['normal', '🙂 רגיל', 0, ''],
+    ['hard', '🎯 קשה', Logic.DIFF_UNLOCK.hard, 'סף 75%, מסיחים דומים, XP ×1.25'],
+    ['expert', '🏆 מומחה', Logic.DIFF_UNLOCK.expert, '6 תשובות, אפס סלחנות, XP ×1.5']
+  ];
   var html = '<button class="btn ghost" data-go="more" style="padding:.3rem .2rem;margin-bottom:.4rem">‹ חזרה</button>' +
     '<h1 style="font-size:1.4rem;margin-bottom:.8rem">⚙️ הגדרות</h1>' +
+
+    '<div class="card"><div class="kicker">🎯 רמת קושי</div>' +
+    '<div class="chips" style="margin-top:.3rem">' +
+    dTiers.map(function (t) {
+      var locked = lvl < t[2];
+      return '<button class="chip ' + ((s.difficulty || 'auto') === t[0] ? 'on' : '') + '" data-diff="' + t[0] + '" ' + (locked ? 'disabled' : '') + '>' +
+        (locked ? '🔒 ' : '') + t[1] + (locked ? ' · רמה ' + t[2] : '') + '</button>';
+    }).join('') + '</div>' +
+    '<div class="small muted" style="margin-top:.5rem">ככל שקשה יותר — סף מעבר גבוה יותר, פחות זמן, מסיחים מתעתעים, ו-XP מוגדל. ' +
+    (dTiers.filter(function (t) { return lvl < t[2]; }).length ? 'רמות נעולות נפתחות עם ההתקדמות.' : 'הכול פתוח — כל הכבוד!') + '</div></div>' +
 
     '<div class="card"><div class="kicker">קול והגייה · ' + activeLang().flag + ' ' + activeLang().name + '</div>' +
     '<div class="setrow"><div class="sl">מבטא</div><div class="chips">' +
@@ -2164,6 +2285,13 @@ ROUTES.settings = function () {
     '<div class="small muted" style="margin-top:.5rem">הנתונים נשמרים במכשיר (ועם חשבון — גם בענן). הגיבוי הוא קובץ JSON אחד.</div></div>';
   $('#view').innerHTML = html;
 
+  $$('#view [data-diff]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      S.settings.difficulty = b.getAttribute('data-diff'); save(); updateBadges();
+      toast('🎯 רמת הקושי: ' + (S.settings.difficulty === 'auto' ? 'אוטומטי — ' + difficulty().he : difficulty().he));
+      ROUTES.settings();
+    });
+  });
   $$('#view [data-acc]').forEach(function (b) {
     b.addEventListener('click', function () { S.settings.accents[lc] = b.getAttribute('data-acc'); S.settings.voiceURIs[lc] = ''; save(); TTS.pick(); ROUTES.settings(); });
   });
@@ -2283,6 +2411,7 @@ function boot() {
       });
     } catch (e) { }
   }
+  applySpares();
   render();
   if (!S.onboarded) showOnboarding();
   if ('serviceWorker' in navigator) {

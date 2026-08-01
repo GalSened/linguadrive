@@ -43,8 +43,28 @@ const man = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
 man.icons.forEach(i => ok(fs.existsSync(i.src), 'manifest icon exists: ' + i.src));
 
 // version discipline: bump both together
-ok(app.includes("var APP_VERSION = '2.5.0'"), 'app version 2.5.0');
-ok(sw.includes('linguadrive-v2.5.0'), 'sw cache version bumped in lockstep');
+ok(app.includes("var APP_VERSION = '2.6.0'"), 'app version 2.6.0');
+ok(sw.includes('linguadrive-v2.6.0'), 'sw cache version bumped in lockstep');
+
+// v2.6.0: difficulty tiers wired at every answer surface
+ok(app.includes('function difficulty'), 'difficulty resolver exists');
+ok(app.includes("difficulty: 'auto'"), 'difficulty default = auto');
+ok(html.includes('id="diffChip"'), 'topbar difficulty chip');
+ok(app.includes('data-diff'), 'settings difficulty chips');
+ok(app.includes('qtimer'), 'quiz clock markup on hard+');
+ok((app.match(/difficulty\(\)/g) || []).length >= 8, 'difficulty consulted at 8+ sites');
+ok(fs.readFileSync('answers.js', 'utf8').includes('pickDistractorsHard'), 'answers uses lookalike distractors on hard+');
+ok(app.includes('xpMult'), 'XP multiplier applied');
+
+// v2.6.0: streak insurance + milestone garage + juice
+ok(app.includes('function applySpares'), 'spare-tire streak insurance exists');
+ok(app.includes('spares: 0'), 'spares in DEFAULTS');
+ok(html.includes('id="spareWrap"'), 'spare tire visible in topbar');
+ok(app.includes("streak: 7") && app.includes("streak: 30") && app.includes("streak: 100"), 'streak-milestone vehicles');
+ok(app.includes('combo-hot'), 'turbo combo glow wired');
+ok(html.includes('scorepop'), 'turbo score pop animation');
+ok(html.includes('viewin'), 'screen-transition animation');
+ok(fs.readFileSync('merge.js', 'utf8').includes('spares'), 'cloud merge carries spares');
 
 // v2.5.0: real-voice files play first, synth is the fallback — single seam inside TTS.speak
 ok(app.includes('Voice.play'), 'TTS.speak consults Voice.play');

@@ -46,12 +46,17 @@
         '<input type="text" id="' + p + 'Type" dir="ltr" autocomplete="off" autocapitalize="none" spellcheck="false" ' +
         'placeholder="' + (S.settings.lang === 'es' ? 'escribe aquí…' : 'type here…') + '" style="flex:1">' +
         '<button class="btn primary" id="' + p + 'TypeGo" style="flex:none">בדוק</button></div>' +
-        '<div class="small muted" style="margin-top:.3rem;text-align:center">אפשר גם Enter · לא רגיש לאותיות גדולות/קטנות או ניקוד</div>';
+        '<div class="small muted" style="margin-top:.3rem;text-align:center">אפשר גם Enter · ' +
+        (difficulty().typedExact ? '🎯 מצב מדויק: שגיאת כתיב נחשבת טעות' : 'לא רגיש לאותיות גדולות/קטנות או ניקוד') + '</div>';
     } else {
+      var diff = difficulty();
       var pool = (opts.pool || []).slice();
       /* shuffle pool cheaply for distractor variety */
       for (var i = pool.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t2 = pool[i]; pool[i] = pool[j]; pool[j] = t2; }
-      var dis = Logic.pickDistractors(pool, opts.target.en, 3);
+      /* hard/expert: similarity-ranked distractors + more of them — no giveaway options */
+      var dis = diff.hardDistractors
+        ? Logic.pickDistractorsHard(pool, opts.target.en, diff.choices - 1)
+        : Logic.pickDistractors(pool, opts.target.en, diff.choices - 1);
       var options = dis.map(function (d) { return d.en; });
       options.push(opts.target.en);
       for (var k = options.length - 1; k > 0; k--) { var j2 = Math.floor(Math.random() * (k + 1)); var t3 = options[k]; options[k] = options[j2]; options[j2] = t3; }
@@ -86,7 +91,7 @@
       if (!res.ok) { if (opts.onVoiceIssue) opts.onVoiceIssue(sttErrorHe(res.error)); return; }
       var r = Logic.bestScore(opts.target.en, res.alts);
       done = true;
-      opts.onResult(r.score >= 60, { method: 'voice', score: r.score, heard: r.heard });
+      opts.onResult(r.score >= difficulty().passScore, { method: 'voice', score: r.score, heard: r.heard });
     });
 
     var inp = $('#' + p + 'Type'), go = $('#' + p + 'TypeGo');
@@ -94,7 +99,7 @@
       if (done || !inp) return;
       var v = (inp.value || '').trim();
       if (!v) { inp.focus(); return; }
-      var r = Logic.typedMatch(opts.target.en, v);
+      var r = Logic.typedMatch(opts.target.en, v, undefined, difficulty().typedExact);
       done = true;
       opts.onResult(r.ok, { method: 'type', score: r.score, typed: v });
     }

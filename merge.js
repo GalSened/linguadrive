@@ -232,6 +232,8 @@
         counters: counters,
         weak: mergeWeak(a.weak, b.weak),
         recent: keepRecent(a, b),
+        /* spares are consumed as well as earned — the most recent writer knows the truth */
+        spares: Math.max(0, Math.min(2, num(lww.spares))),
         meta: {
           updatedAt: Math.max(aTs, bTs),
           settingsAt: Math.max(aSet, bSet),

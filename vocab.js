@@ -278,14 +278,18 @@
       var hear = $('#pHear');
       if (hear) hear.addEventListener('click', function () { TTS.speak(w.en); });
       TTS.speak(w.en);
-      /* 4 Hebrew meanings — comprehension is answered by tapping, so voice is never required */
-      var seenHe = {}, opts = [];
+      /* Hebrew meanings — comprehension is answered by tapping, so voice is never required.
+         Difficulty widens the set (expert: 6) and on hard+ ranks distractors by similarity. */
+      var dl = difficulty();
+      var seenHe = {}, cands = [];
       seenHe[w.he] = 1;
       shuffle(poolFor(Prac.kind).concat(vocabPool('all'))).forEach(function (c) {
-        if (opts.length >= 3 || !c.he || seenHe[c.he]) return;
+        if (!c.he || seenHe[c.he]) return;
         if (Logic.normalize(c.en) === Logic.normalize(w.en)) return;
-        seenHe[c.he] = 1; opts.push(c.he);
+        seenHe[c.he] = 1; cands.push(c.he);
       });
+      if (dl.hardDistractors) cands.sort(function (a, b) { return Logic.bigramSim(w.he, b) - Logic.bigramSim(w.he, a); });
+      var opts = cands.slice(0, dl.choices - 1);
       opts.push(w.he);
       opts = shuffle(opts);
       $('#pListen').innerHTML = opts.map(function (o) {

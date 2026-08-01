@@ -232,7 +232,7 @@ async function until(fn, ms, name) {
 
   /* 10b. garage */
   w.location.hash = 'garage';
-  await until(() => $$('#view .gcar').length === 12, 1500, 'garage renders 12 vehicles');
+  await until(() => $$('#view .gcar').length === 15, 1500, 'garage renders 15 vehicles (incl. streak milestones)');
   ok(!$$('#view .gcar')[0].disabled, 'starter car unlocked');
   ok(w.Logic.levelInfo(w.S.xp).level >= 2, 'level >= 2 by now (xp=' + w.S.xp + ')');
   $$('#view [data-veh]')[1].click(); await sleep(50);

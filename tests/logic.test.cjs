@@ -79,6 +79,30 @@ eq(L.computeStreak(log, Date.now()), 2, 'streak survives empty today');
 log = {}; log[dk(2)] = { items: 5 };
 eq(L.computeStreak(log, Date.now()), 0, 'gap breaks streak');
 
+// --- difficulty tiers (v2.6.0: the game must get HARDER as you grow) ---
+eq(L.diffParams('normal').passScore, 60, 'normal pass 60');
+eq(L.diffParams('hard').passScore, 75, 'hard pass 75');
+eq(L.diffParams('expert').choices, 6, 'expert = 6 choices');
+ok(L.diffParams('expert').xpMult > L.diffParams('hard').xpMult && L.diffParams('hard').xpMult > 1, 'xp multiplier climbs with difficulty');
+ok(L.diffParams('hard').turboVoiceMs < L.diffParams('normal').turboVoiceMs, 'hard turbo window tighter');
+ok(L.diffParams('expert').quizSec > 0 && L.diffParams('normal').quizSec === 0, 'quiz clock only on hard+');
+eq(L.autoDifficulty(1), 'normal', 'auto: lvl1 normal');
+eq(L.autoDifficulty(L.DIFF_UNLOCK.hard), 'hard', 'auto: unlock level → hard');
+eq(L.autoDifficulty(L.DIFF_UNLOCK.expert + 2), 'expert', 'auto: high level → expert');
+
+// strict typed match: a typo passes normal, fails strict
+ok(L.typedMatch('restaurant', 'restaraunt').ok, 'typo tolerated at normal');
+ok(!L.typedMatch('restaurant', 'restaraunt', undefined, true).ok, 'typo rejected at strict');
+ok(L.typedMatch('hello', 'Hello', undefined, true).ok, 'strict still case/niqqud-insensitive');
+
+// similarity + hard distractors: similar-shaped words rank first
+ok(L.bigramSim('though', 'through') > L.bigramSim('though', 'banana'), 'bigram similarity sane');
+ok(L.wordsMatch('color', 'colour'), 'bigramSim does not shadow the Levenshtein similarity (regression guard)');
+const dPool = [{ en: 'banana' }, { en: 'through' }, { en: 'thought' }, { en: 'cat' }];
+const hardD = L.pickDistractorsHard(dPool, 'though', 2).map(x => x.en);
+ok(hardD.includes('through') && hardD.includes('thought'), 'hard distractors pick lookalikes (got ' + hardD + ')');
+ok(!L.pickDistractorsHard(dPool, 'though', 4).map(x => x.en).includes('though'), 'target never among distractors');
+
 console.log(fail === 0 ? '  ✅ logic: ' + pass + ' passed' : '  ❌ logic: ' + fail + ' failed / ' + (pass + fail));
 process.exitCode = fail ? 1 : 0;
 
