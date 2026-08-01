@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.4.0';
+var APP_VERSION = '2.4.1';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -42,16 +42,24 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2200);
 }
 
-/* The bottom nav is position:fixed and CAN overlap mid-page controls on short windows —
-   a click then hits the nav, not the control (found live 2026-08-01: mic under nav).
-   Call on every freshly-rendered answer control: scrolls it clear only when actually occluded. */
+/* The fixed bottom nav AND the sticky top bar can both overlap mid-page controls on short
+   windows — a click then hits the chrome, not the control (found live 2026-08-01: mic under
+   nav; dir-chips under topbar after an over-eager center-scroll). Call on every freshly-
+   rendered answer control. Scrolls the MINIMUM that clears the nav — centering over-scrolls
+   and pushes the controls above the target under the top bar. */
 function ensureVisible(el) {
   try {
     if (!el) return;
     var nav = document.getElementById('bottomnav');
+    var tb = document.getElementById('topbar');
+    var topLimit = (tb ? tb.getBoundingClientRect().bottom : 0) + 4;
     var limit = window.innerHeight - (nav ? nav.offsetHeight : 0) - 8;
     var r = el.getBoundingClientRect();
-    if (r.bottom > limit || r.top < 0) el.scrollIntoView({ block: 'center' });
+    if (r.bottom > limit) {
+      window.scrollBy(0, Math.min(r.bottom - limit, Math.max(0, r.top - topLimit)));
+    } else if (r.top < topLimit) {
+      window.scrollBy(0, r.top - topLimit);
+    }
   } catch (e) { }
 }
 function openSheet(html) { $('#sheet').innerHTML = html; $('#overlay').classList.remove('hide'); }
@@ -1974,6 +1982,7 @@ ROUTES.daily = function () {
   html += '<div id="ddAnswer" style="margin-top:.2rem"></div>' +
     '<button class="btn" id="ddSkip" style="width:100%;margin-top:.5rem">⏭ לא יודע — הצג ועבור</button>';
   $('#view').innerHTML = html;
+  try { window.scrollTo(0, 0); } catch (e) { }
   var marked = false;
   function mark(hit, revealSpeak) {
     if (marked) return; marked = true;

@@ -42,12 +42,16 @@ const man = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
 man.icons.forEach(i => ok(fs.existsSync(i.src), 'manifest icon exists: ' + i.src));
 
 // version discipline: bump both together
-ok(app.includes("var APP_VERSION = '2.4.0'"), 'app version 2.4.0');
-ok(sw.includes('linguadrive-v2.4.0'), 'sw cache version bumped in lockstep');
+ok(app.includes("var APP_VERSION = '2.4.1'"), 'app version 2.4.1');
+ok(sw.includes('linguadrive-v2.4.1'), 'sw cache version bumped in lockstep');
 
-// fixed-nav occlusion guard (bug found live 2026-08-01: mic under bottomnav ate clicks)
+// fixed-chrome occlusion guard (bugs found live 2026-08-01: mic under bottomnav ate clicks,
+// then dir-chips under the sticky topbar after a center-scroll over-scrolled)
 ok(app.includes('function ensureVisible'), 'ensureVisible helper exists');
 ok((app.match(/ensureVisible\(/g) || []).length >= 6, 'ensureVisible wired at 6+ render sites');
+const evBody = (app.match(/function ensureVisible[\s\S]*?\n}/) || [''])[0];
+ok(evBody.includes("getElementById('topbar')"), 'ensureVisible respects the sticky top bar');
+ok(evBody.includes('scrollBy') && !evBody.includes('scrollIntoView'), 'ensureVisible scrolls minimally, not center (center over-scrolls under the topbar)');
 
 // continuity: flows chain forward instead of dead-ending
 ok(app.includes('tNextLesson'), 'dialogue-done chains to the actual next lesson');

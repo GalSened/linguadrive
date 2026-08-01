@@ -18,7 +18,7 @@ async function until(fn, ms, name) {
   const w = dom.window, d = w.document;
 
   /* ---- browser API stubs ---- */
-  w.scrollTo = () => {};
+  w.scrollTo = () => {}; w.scrollBy = () => {};
   w.SpeechSynthesisUtterance = function (text) { this.text = text; this.onend = null; this.onerror = null; };
   const spokenLog = [];
   w.speechSynthesis = {

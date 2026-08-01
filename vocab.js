@@ -233,6 +233,7 @@
     }
     html += '<button class="btn" id="pShow" style="width:100%;margin-top:.5rem">👁 לא יודע — הצג</button>';
     $('#view').innerHTML = html;
+    try { window.scrollTo(0, 0); } catch (e) { }   /* fresh item starts un-scrolled: chips reachable */
 
     $$('#view [data-pdir]').forEach(function (b) {
       b.addEventListener('click', function () {
