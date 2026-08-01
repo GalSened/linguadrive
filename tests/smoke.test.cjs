@@ -53,7 +53,7 @@ async function until(fn, ms, name) {
   /* ---- load scripts in order (as real Scripts, not eval) ---- */
   const ctx = dom.getInternalVMContext();
   for (const f of ['logic.js', 'merge.js', 'content.js', 'content-es.js', 'content-bank.js', 'content-bank-es.js',
-                   'audio-manifest.js', 'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'voice.js', 'answers.js', 'vocab.js', 'account.js']) {
+                   'audio-manifest.js', 'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'voice.js', 'answers.js', 'vocab.js', 'account.js', 'league.js']) {
     vm.runInContext(fs.readFileSync(f, 'utf8'), ctx, { filename: f });
     /* smoke exercises the LOCAL-ONLY path deliberately (cloud path has its own suite: cloud.test) */
     if (f === 'cloud-config.js') vm.runInContext('window.CLOUD_CONFIG = null;', ctx, { filename: 'smoke-override' });
@@ -388,6 +388,16 @@ async function until(fn, ms, name) {
   await until(() => w.S.counters.listens > listensBefore, 2500, 'listen answer counted as listening XP');
   w.S.settings.pracDir = 'produce'; w.save();
   w.location.hash = 'words'; await sleep(60);
+
+  /* 10j. LEAGUE — route + home strip render honestly with cloud disabled */
+  w.location.hash = 'league';
+  await until(() => $('#view').textContent.includes('הליגה השבועית'), 1500, 'league route renders');
+  ok($('#view').textContent.includes('לא הופעלו'), 'league explains disabled cloud');
+  ok(typeof w.League.weeklyXp() === 'number', 'weekly XP tracked (' + w.League.weeklyXp() + ')');
+  ok(w.S.weekXp.week === w.Logic.isoWeek(Date.now()), 'week key current');
+  w.location.hash = 'home'; w.dispatchEvent(new w.Event('hashchange'));
+  await until(() => $('#homeLeague'), 1500, 'home league strip mount exists');
+  ok(!!$('#turboGo'), 'home turbo card present without STT gate');
 
   /* 11. settings render + voice test */
   w.location.hash = 'settings';

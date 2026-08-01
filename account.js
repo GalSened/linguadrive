@@ -298,6 +298,7 @@
     openSheet: openAccountSheet,
     onDailyDone: onDailyDone,
     onTurboRecord: onTurboRecord,
-    renderBoardInto: renderBoardInto
+    renderBoardInto: renderBoardInto,
+    submitOrQueue: submitOrQueue
   };
 })();

@@ -334,6 +334,10 @@ input[type=text]:focus,input[type=email]:focus,input[type=password]:focus,input[
 .lb-row:last-child{border-bottom:none}
 .lb-row .rank{font-family:var(--road);font-weight:800;width:2rem;text-align:center;direction:ltr;color:var(--muted)}
 .lb-row.me{background:var(--lane-soft);border-radius:10px;padding-inline:.5rem}
+.lgzone{display:flex;align-items:center;gap:.5rem;font-size:.72rem;font-weight:700;letter-spacing:.05em;margin:.35rem 0;opacity:.9}
+.lgzone::before,.lgzone::after{content:"";flex:1;height:1px;background:currentColor;opacity:.4}
+.lgzone.up{color:var(--ok)}
+.lgzone.down{color:var(--danger)}
 .lb-row .score{font-family:var(--road);font-weight:800;direction:ltr;color:var(--lane)}
 .wordstatus{width:10px;height:10px;border-radius:50%;flex:none;background:var(--line)}
 .wordstatus.tracked{background:var(--lane)}
@@ -454,5 +458,6 @@ html[dir="ltr"] .switch input:checked + .sldr::before{transform:translateX(20px)
 <script src="answers.js"></script>
 <script src="vocab.js"></script>
 <script src="account.js"></script>
+<script src="league.js"></script>
 </body>
 </html>

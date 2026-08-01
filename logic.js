@@ -313,6 +313,41 @@
   }
   function rankFor(level) { return RANKS[Math.min(level - 1, RANKS.length - 1)]; }
 
+  /* ---------- weekly micro-league (pure math — client-computed cohorts) ---------- */
+  function isoWeek(ts) {
+    var d = new Date(ts);
+    d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));    /* shift to nearest Thursday */
+    var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    var week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+    return d.getUTCFullYear() + '-W' + String(week).padStart(2, '0');
+  }
+  /* everyone hashes uid|week → same buckets on every client, no server needed.
+     FNV alone is biased under a small modulo with structured ids — finish with a
+     murmur3-style avalanche so every bit lands uniformly. */
+  function leagueCohort(uids, myUid, weekKey, size) {
+    size = size || 25;
+    var k = Math.max(1, Math.ceil((uids.length || 1) / size));
+    var bucketOf = function (uid) {
+      var h = hashStr(String(uid) + '|' + weekKey);
+      h ^= h >>> 16; h = Math.imul(h, 2246822507) >>> 0;
+      h ^= h >>> 13; h = Math.imul(h, 3266489909) >>> 0;
+      h ^= h >>> 16;
+      return h % k;
+    };
+    var mine = bucketOf(String(myUid));
+    return uids.filter(function (u) { return bucketOf(String(u)) === mine; });
+  }
+  /* promotion zone = top third capped at 7 (Duolingo-style generous early climb);
+     demotion only from tier>0, only in cohorts of 8+ */
+  function leagueOutcome(rank, size, tier, maxTier) {
+    maxTier = maxTier == null ? 4 : maxTier;
+    var zone = Math.min(7, Math.max(1, Math.floor(size / 3)));
+    if (rank >= 1 && rank <= zone && tier < maxTier) return 'up';
+    if (size >= 8 && rank > size - zone && tier > 0) return 'down';
+    return 'stay';
+  }
+
   function hashStr(s) {
     var h = 2166136261;
     for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
@@ -383,6 +418,9 @@
     pickDistractors: pickDistractors,
     pickDistractorsHard: pickDistractorsHard,
     bigramSim: bigramSim,
+    isoWeek: isoWeek,
+    leagueCohort: leagueCohort,
+    leagueOutcome: leagueOutcome,
     diffParams: diffParams,
     autoDifficulty: autoDifficulty,
     DIFF_UNLOCK: DIFF_UNLOCK,

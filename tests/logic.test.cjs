@@ -103,6 +103,34 @@ const hardD = L.pickDistractorsHard(dPool, 'though', 2).map(x => x.en);
 ok(hardD.includes('through') && hardD.includes('thought'), 'hard distractors pick lookalikes (got ' + hardD + ')');
 ok(!L.pickDistractorsHard(dPool, 'though', 4).map(x => x.en).includes('though'), 'target never among distractors');
 
+// --- weekly micro-league math (v2.7.0) ---
+eq(L.isoWeek(Date.UTC(2026, 0, 1, 12)), '2026-W01', 'isoWeek: 2026-01-01 is W01');
+eq(L.isoWeek(Date.UTC(2026, 7, 1, 12)), '2026-W31', 'isoWeek: 2026-08-01 is W31');
+eq(L.isoWeek(Date.UTC(2023, 0, 1, 12)), '2022-W52', 'isoWeek: 2023-01-01 belongs to 2022-W52');
+eq(L.isoWeek(Date.UTC(2026, 11, 28, 12)), '2026-W53', 'isoWeek: 2026-12-28 is W53');
+
+const uids = []; for (let i = 0; i < 80; i++) uids.push('user-' + i);
+const lgA = L.leagueCohort(uids, 'user-7', '2026-W31');
+const lgB = L.leagueCohort(uids.slice().reverse(), 'user-7', '2026-W31');
+ok(lgA.includes('user-7'), 'my cohort contains me');
+eq(lgA.slice().sort(), lgB.slice().sort(), 'cohorts deterministic regardless of fetch order');
+ok(lgA.length <= 40 && lgA.length >= 10, 'cohort size sane for 80 players (got ' + lgA.length + ')');
+const cohortSets = new Set(uids.map(u => L.leagueCohort(uids, u, '2026-W31').slice().sort().join(',')));
+let covered = 0; cohortSets.forEach(s => covered += s.split(',').length);
+eq(covered, 80, 'cohorts partition all players (no one lost, no one duplicated)');
+const lgW2 = L.leagueCohort(uids, 'user-7', '2026-W32');
+ok(lgA.slice().sort().join() !== lgW2.slice().sort().join(), 'reshuffled on a new week');
+eq(L.leagueCohort(['solo'], 'solo', '2026-W31'), ['solo'], 'single player → cohort of one');
+
+eq(L.leagueOutcome(1, 25, 0), 'up', 'rank 1/25 promotes');
+eq(L.leagueOutcome(7, 25, 0), 'up', 'rank 7/25 promotes (zone=7)');
+eq(L.leagueOutcome(8, 25, 0), 'stay', 'rank 8/25 stays');
+eq(L.leagueOutcome(25, 25, 2), 'down', 'bottom of 25 demotes from tier 2');
+eq(L.leagueOutcome(25, 25, 0), 'stay', 'tier 0 never demotes');
+eq(L.leagueOutcome(1, 25, 4), 'stay', 'top tier never promotes further');
+eq(L.leagueOutcome(5, 5, 1), 'stay', 'tiny cohort (<8) never demotes');
+eq(L.leagueOutcome(1, 2, 0), 'up', 'cohort of 2: rank 1 still promotes');
+
 console.log(fail === 0 ? '  ✅ logic: ' + pass + ' passed' : '  ❌ logic: ' + fail + ' failed / ' + (pass + fail));
 process.exitCode = fail ? 1 : 0;
 

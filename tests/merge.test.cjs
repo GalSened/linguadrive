@@ -215,5 +215,24 @@ const M = (a, b) => Merge.mergeStates(a, b, DEFAULTS);
   eq(m3.recent.car, ['r'], 'no local recent → remote shape used');
 }
 
+/* --- 14. league bookkeeping: weekXp same-week min-base / later-week wins; league LWW --- */
+{
+  const a = D(), b = D();
+  a.weekXp = { week: '2026-W31', base: 100 };
+  b.weekXp = { week: '2026-W31', base: 140 };
+  a.meta = { updatedAt: 10, settingsAt: 10 }; b.meta = { updatedAt: 20, settingsAt: 20 };
+  const m = M(a, b);
+  ok(m.weekXp.week === '2026-W31' && m.weekXp.base === 100, 'same week → earliest base (true week start)');
+  b.weekXp = { week: '2026-W32', base: 900 };
+  const m2 = M(a, b);
+  ok(m2.weekXp.week === '2026-W32' && m2.weekXp.base === 900, 'later week wins outright');
+  a.league = { tier: 1, lastResult: { week: '2026-W30', rank: 3, size: 20, out: 'up' }, seenWeek: '2026-W30', pendingWeek: '' };
+  b.league = { tier: 2, lastResult: { week: '2026-W31', rank: 2, size: 22, out: 'up' }, seenWeek: '2026-W31', pendingWeek: '' };
+  const m3 = M(a, b);
+  ok(m3.league.tier === 2, 'league follows the newer writer (LWW)');
+  const m4 = M({ weekXp: 'corrupt', league: 42 }, b);
+  ok(m4.weekXp.week === '2026-W32' && typeof m4.league === 'object', 'corrupt league fields fall back safely');
+}
+
 console.log(fail === 0 ? '  ✅ merge: ' + pass + ' passed' : '  ❌ merge: ' + fail + ' failed / ' + (pass + fail));
 process.exitCode = fail ? 1 : 0;

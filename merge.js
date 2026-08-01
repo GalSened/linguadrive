@@ -234,6 +234,16 @@
         recent: keepRecent(a, b),
         /* spares are consumed as well as earned — the most recent writer knows the truth */
         spares: Math.max(0, Math.min(2, num(lww.spares))),
+        /* league week bookkeeping: same week → EARLIEST base (both saw the true week start);
+           different weeks → the later week wins outright */
+        weekXp: (function () {
+          var wa = isObj(a.weekXp) ? a.weekXp : {}, wb = isObj(b.weekXp) ? b.weekXp : {};
+          var ka = str(wa.week), kb = str(wb.week);
+          if (!ka && !kb) return { week: '', base: 0 };
+          if (ka === kb) return { week: ka, base: Math.min(num(wa.base), num(wb.base)) };
+          return ka > kb ? { week: ka, base: num(wa.base) } : { week: kb, base: num(wb.base) };
+        })(),
+        league: isObj(lww.league) ? JSON.parse(JSON.stringify(lww.league)) : (d.league || { tier: 0, lastResult: null, seenWeek: '', pendingWeek: '' }),
         meta: {
           updatedAt: Math.max(aTs, bTs),
           settingsAt: Math.max(aSet, bSet),

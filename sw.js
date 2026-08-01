@@ -1,6 +1,6 @@
 /* LinguaDrive service worker — offline app shell + font caching */
 'use strict';
-var VERSION = 'linguadrive-v2.6.0';
+var VERSION = 'linguadrive-v2.7.0';
 var SHELL = [
   '.',
   'index.html',
@@ -19,6 +19,7 @@ var SHELL = [
   'answers.js',
   'vocab.js',
   'account.js',
+  'league.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.6.0';
+var APP_VERSION = '2.7.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -92,6 +92,8 @@ var DEFAULTS = {
   recent: { turbo: [], car: [], vocab: [] },   // anti-repetition MRU windows (per practice mode)
   weak: {},                                    // '{lang}:{norm-en}' → {n misses, s hit-streak, t ts}
   spares: 0,                                   // 🛞 streak insurance (max 2) — earned by finishing all daily quests
+  weekXp: { week: '', base: 0 },               // league bookkeeping: xp at week start
+  league: { tier: 0, lastResult: null, seenWeek: '', pendingWeek: '' },
   meta: { updatedAt: 0, settingsAt: 0 }        // cloud-sync LWW timestamps
 };
 var S = load();
@@ -117,6 +119,8 @@ function load() {
     s.recent = rec;
     s.weak = (s.weak && typeof s.weak === 'object' && !Array.isArray(s.weak)) ? s.weak : {};
     s.spares = Math.max(0, Math.min(2, +s.spares || 0));
+    s.weekXp = Object.assign({}, d.weekXp, (s.weekXp && typeof s.weekXp === 'object') ? s.weekXp : {});
+    s.league = Object.assign({}, d.league, (s.league && typeof s.league === 'object') ? s.league : {});
     return Object.assign(d, s, { settings: s.settings });
   } catch (e) { return JSON.parse(JSON.stringify(DEFAULTS)); }
 }
@@ -125,6 +129,7 @@ function save() {
   S.meta.updatedAt = Date.now(); S.meta.settingsAt = S.meta.updatedAt;
   try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) { /* storage full/blocked */ }
   if (window.Sync) { try { Sync.schedule(); } catch (e) { } }
+  if (window.League) { try { League.schedule(); } catch (e) { } }
 }
 function lstate(id) { if (!S.lessons[id]) S.lessons[id] = { opened: 0, sent: {}, quizBest: -1, dlgDone: false, done: false, vocabAdded: false }; return S.lessons[id]; }
 function logActivity(items, minutes) {
@@ -826,12 +831,13 @@ ROUTES.home = function () {
     (dDone ? 'הושלם: ' + S.daily.score + '/10 · רצף ' + S.dailyStreak + ' 🔥' : '10 מילים · כולם מקבלים היום את אותו אתגר') + '</span></span>' +
     '<b style="color:var(--lane)">' + (dDone ? '✓' : '›') + '</b></button>';
 
-  if (STT.supported) {
-    html += '<button class="card" id="turboGo" data-cargo="turbo" style="width:100%;text-align:right;display:flex;align-items:center;gap:.8rem;cursor:pointer">' +
-      '<span style="font-size:1.9rem">🏁</span>' +
-      '<span class="grow"><b>טורבו 60</b><span class="small muted" style="display:block">ספרינט קולי: אני בעברית — אתה ב' + activeLang().name + '. קומבו מכפיל נקודות.</span></span>' +
-      '<b class="en" style="direction:ltr;color:var(--lane)">' + (S.best['turbo_' + S.settings.lang] || 0) + '</b></button>';
-  }
+  html += '<div id="homeLeague"></div>';
+
+  html += '<button class="card" id="turboGo" data-cargo="turbo" style="width:100%;text-align:right;display:flex;align-items:center;gap:.8rem;cursor:pointer">' +
+    '<span style="font-size:1.9rem">🏁</span>' +
+    '<span class="grow"><b>טורבו 60</b><span class="small muted" style="display:block">' +
+    (STT.supported ? 'ספרינט קולי או מוקלד: אני בעברית — אתה ב' : 'ספרינט מוקלד: אני בעברית — אתה ב') + activeLang().name + '. קומבו מכפיל נקודות.</span></span>' +
+    '<b class="en" style="direction:ltr;color:var(--lane)">' + (S.best['turbo_' + S.settings.lang] || 0) + '</b></button>';
 
   html += '<div class="btnrow" style="margin-bottom:1rem">' +
     '<button class="btn big" data-go="srs">🃏 חזרות ' + (due ? '<span style="color:var(--danger)">(' + due + ')</span>' : '') + '</button>' +
@@ -840,6 +846,7 @@ ROUTES.home = function () {
   html += '<button class="lesson-item" data-go="clinic"><span class="lic">🗣️</span><span class="lt"><span class="he" style="display:block">קליניקת הגייה לדוברי עברית</span><span class="small muted">7 הצלילים שמסגירים מבטא ישראלי</span></span><span>›</span></button>';
 
   $('#view').innerHTML = html;
+  if (window.League) { try { League.homeStrip($('#homeLeague')); } catch (e) { } }
 };
 function stat(ic, n, label) { return '<div class="stat"><div class="n">' + ic + ' ' + n + '</div><div class="l">' + label + '</div></div>'; }
 function nextLesson() {
@@ -2136,6 +2143,7 @@ ROUTES.more = function () {
     }).join('') + '</div><div class="small muted" style="margin-top:.5rem">ההתקדמות נשמרת בנפרד לכל שפה. הרצף משותף.</div></div>';
   if (window.Account) html += Account.moreRowHtml();
   [['garage', '🏎️', 'המוסך שלי', 'רכבים שנפתחים עם רמות והישגים'],
+   ['league', '🏁', 'הליגה השבועית', 'מקצה של ~25 שחקנים · שבעת הראשונים עולים ליגה'],
    ['boards', '🏆', 'טבלת השיאים', 'האתגר היומי וטורבו 60 — מול כל השחקנים'],
    ['daily', '🗞️', 'האתגר היומי', '10 מילים, ניסיון אחד ביום'],
    ['progress', '📊', 'התקדמות', 'רצף, דקות, מילים שנקלטו'],
@@ -2412,6 +2420,7 @@ function boot() {
     } catch (e) { }
   }
   applySpares();
+  if (window.League) { try { League.init(); } catch (e) { } }
   render();
   if (!S.onboarded) showOnboarding();
   if ('serviceWorker' in navigator) {
