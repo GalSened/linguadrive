@@ -42,8 +42,18 @@ const man = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
 man.icons.forEach(i => ok(fs.existsSync(i.src), 'manifest icon exists: ' + i.src));
 
 // version discipline: bump both together
-ok(app.includes("var APP_VERSION = '2.2.0'"), 'app version 2.2.0');
-ok(sw.includes('linguadrive-v2.2.0'), 'sw cache version bumped in lockstep');
+ok(app.includes("var APP_VERSION = '2.3.0'"), 'app version 2.3.0');
+ok(sw.includes('linguadrive-v2.3.0'), 'sw cache version bumped in lockstep');
+
+// fixed-nav occlusion guard (bug found live 2026-08-01: mic under bottomnav ate clicks)
+ok(app.includes('function ensureVisible'), 'ensureVisible helper exists');
+ok((app.match(/ensureVisible\(/g) || []).length >= 6, 'ensureVisible wired at 6+ render sites');
+
+// continuity: flows chain forward instead of dead-ending
+ok(app.includes('tNextLesson'), 'dialogue-done chains to the actual next lesson');
+ok(app.includes('vocabNext'), 'vocab tab chains to speak practice');
+ok(fs.readFileSync('vocab.js', 'utf8').includes('pNextTopic'), 'practice summary chains to next topic');
+ok(fs.readFileSync('vocab.js', 'utf8').includes('neighborTopic'), 'topic prev/next navigation');
 ok(sw.includes('SKIP_WAITING'), 'sw update channel');
 
 // multi-user layer wiring

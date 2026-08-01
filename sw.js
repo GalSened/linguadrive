@@ -1,6 +1,6 @@
 /* LinguaDrive service worker — offline app shell + font caching */
 'use strict';
-var VERSION = 'linguadrive-v2.2.0';
+var VERSION = 'linguadrive-v2.3.0';
 var SHELL = [
   '.',
   'index.html',

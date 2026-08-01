@@ -104,6 +104,8 @@
       setTimeout(function () { try { inp.focus(); } catch (e) { } }, 60);
     }
 
+    if (typeof ensureVisible === 'function') ensureVisible(container);
+
     $$('[data-achoice]', container).forEach(function (b) {
       b.addEventListener('click', function () {
         if (done) return; done = true;

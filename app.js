@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.2.0';
+var APP_VERSION = '2.3.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -42,6 +42,18 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2200);
 }
 
+/* The bottom nav is position:fixed and CAN overlap mid-page controls on short windows —
+   a click then hits the nav, not the control (found live 2026-08-01: mic under nav).
+   Call on every freshly-rendered answer control: scrolls it clear only when actually occluded. */
+function ensureVisible(el) {
+  try {
+    if (!el) return;
+    var nav = document.getElementById('bottomnav');
+    var limit = window.innerHeight - (nav ? nav.offsetHeight : 0) - 8;
+    var r = el.getBoundingClientRect();
+    if (r.bottom > limit || r.top < 0) el.scrollIntoView({ block: 'center' });
+  } catch (e) { }
+}
 function openSheet(html) { $('#sheet').innerHTML = html; $('#overlay').classList.remove('hide'); }
 function closeSheet() { $('#overlay').classList.add('hide'); $('#sheet').innerHTML = ''; }
 $('#overlay').addEventListener('click', function (e) { if (e.target.id === 'overlay') closeSheet(); });
@@ -952,8 +964,10 @@ function renderVocab(l, box) {
       '</div>';
   }).join('') + '</div>';
   html += '<div class="btnrow"><button class="btn big" id="vocabPlayAll">🔊 השמע את כולן</button>' +
-    '<button class="btn big primary" id="vocabAdd">' + (st.vocabAdded ? '✓ בחזרות שלך' : '🃏 הוסף לחזרות') + '</button></div>';
+    '<button class="btn big" id="vocabAdd">' + (st.vocabAdded ? '✓ בחזרות שלך' : '🃏 הוסף לחזרות') + '</button></div>' +
+    '<button class="btn big primary" id="vocabNext" style="width:100%;margin-top:.5rem">המשך לתרגול דיבור ›</button>';
   box.innerHTML = html;
+  $('#vocabNext').addEventListener('click', function () { lessonTab[l.id] = 'speak'; ROUTES.lesson(l.id); });
   $('#vocabAdd').addEventListener('click', function () {
     var n = ensureCards(l);
     st.vocabAdded = true; save();
@@ -991,8 +1005,9 @@ function renderSpeak(l, box) {
     laneProgress(scored, l.sentences.length) +
     '<div class="small muted" style="text-align:center;margin-bottom:.6rem">' + scored + ' מתוך ' + l.sentences.length + ' משפטים תורגלו</div>' +
     '<div class="btnrow"><button class="btn" id="spPrev" ' + (i === 0 ? 'disabled' : '') + '>‹ הקודם</button>' +
-    '<button class="btn primary" id="spNext">' + (i === l.sentences.length - 1 ? 'סיום' : 'הבא ›') + '</button></div>';
+    '<button class="btn primary" id="spNext">' + (i === l.sentences.length - 1 ? 'המשך לחידון ›' : 'הבא ›') + '</button></div>';
 
+  ensureVisible($('#micBtn'));
   $('#spPrev').addEventListener('click', function () { speakIdx[l.id] = i - 1; renderSpeak(l, box); });
   $('#spNext').addEventListener('click', function () {
     if (i === l.sentences.length - 1) { toast('כל הכבוד! עברת על כל המשפטים 🎉'); lessonTab[l.id] = 'quiz'; ROUTES.lesson(l.id); }
@@ -1092,11 +1107,19 @@ function renderTalk(l, box) {
     var firstDlg = !st.dlgDone;
     st.dlgDone = true; save();
     if (firstDlg) gameEvent('dialogue', 1);
+    /* continuity: the CTA goes to the REAL next stop, not back to a menu */
+    var idx = lessonIndex(l.id);
+    var nextL = CONTENT.lessons[idx + 1] || null;
+    var nextOpen = nextL && lessonUnlocked(idx + 1);
+    var cta = nextOpen
+      ? '<button class="btn big primary" id="tNextLesson">' + nextL.icon + ' לשיעור הבא: ' + esc(nextL.he) + ' ›</button>'
+      : '<button class="btn big primary" data-go="lessons">🗺️ למפת המסע ›</button>';
     box.innerHTML = '<div class="card" style="text-align:center"><div style="font-size:2.5rem">👏</div>' +
-      '<h2>ניהלת שיחה שלמה באנגלית</h2><p class="muted">' + esc(l.dialogue.title) + ' — הושלם</p></div>' +
-      '<div class="btnrow"><button class="btn big" id="tAgain">🔁 שוב מההתחלה</button>' +
-      '<button class="btn big primary" data-go="lessons">לשיעור הבא ›</button></div>';
+      '<h2>ניהלת שיחה שלמה ב' + activeLang().name + '</h2><p class="muted">' + esc(l.dialogue.title) + ' — הושלם</p></div>' +
+      '<div class="btnrow"><button class="btn big" id="tAgain">🔁 שוב</button>' + cta + '</div>';
     $('#tAgain').addEventListener('click', function () { talkIdx[l.id] = 0; renderTalk(l, box); });
+    var tn = $('#tNextLesson');
+    if (tn) tn.addEventListener('click', function () { lessonTab[nextL.id] = 'learn'; nav('lesson/' + nextL.id); });
     return;
   }
   var t = turns[i];
@@ -1121,6 +1144,7 @@ function renderTalk(l, box) {
       '<button class="btn big" id="tNext">אמרתי — המשך ›</button>';
   }
   box.innerHTML = html;
+  ensureVisible($('#tMic') || $('#tNext'));
   if (!mine) TTS.speak(t.en);
   $('#tNext').addEventListener('click', function () { talkIdx[l.id] = i + 1; renderTalk(l, box); });
   var mic = $('#tMic');
@@ -1162,6 +1186,8 @@ ROUTES.srs = function () {
       '<p class="small">החזרה הבאה בעוד בערך ' + (hrs >= 24 ? Math.round(hrs / 24) + ' ימים' : hrs + ' שעות') + '.</p>' +
       '<div class="btnrow" style="margin-top:1rem"><button class="btn big" id="srsAhead">💪 תרגל בכל זאת</button>' +
       '<button class="btn big primary" data-cargo="open">🚗 מצב נהיגה</button></div></div>';
+    var emptyDiv = $('#view .empty .btnrow');
+    if (emptyDiv) emptyDiv.insertAdjacentHTML('beforeend', '<button class="btn big" data-go="words">📖 לספריית המילים</button>');
     $('#srsAhead').addEventListener('click', function () {
       srsQueue = shuffle(Object.keys(S.srs)).slice(0, 10);
       renderCard();
@@ -1202,7 +1228,7 @@ ROUTES.srs = function () {
     flash.addEventListener('click', function (e) {
       if (e.target.closest('[data-say]')) return;
       flash.classList.toggle('flipped');
-      if (flash.classList.contains('flipped')) { $('#srsGrade').style.visibility = 'visible'; TTS.speak(w.en); }
+      if (flash.classList.contains('flipped')) { $('#srsGrade').style.visibility = 'visible'; TTS.speak(w.en); ensureVisible($('#srsGrade')); }
     });
     function gradeCard(ok) {
       S.srs[key] = Logic.reviewCard(card, ok, Date.now());
@@ -1287,6 +1313,7 @@ function drillSentence(c, i) {
     '<div class="small muted" id="dHint">' + (STT.supported ? 'אמור את המשפט' : 'האזן וחזור בקול') + '</div>' +
     '<div class="scorebox" id="dScore"></div></div>' +
     '<button class="btn big" id="dNext">הבא ›</button>';
+  ensureVisible($('#dMic'));
   $('#dNext').addEventListener('click', function () { drillSentence(c, i + 1); });
   var mic = $('#dMic');
   if (mic && STT.supported) mic.addEventListener('click', async function () {
@@ -1864,6 +1891,7 @@ ROUTES.daily = function () {
       onResult: function (ok) { mark(ok, !ok); },
       onVoiceIssue: function (txt) { $('#dFb').innerHTML = '<span class="small muted">' + esc(txt) + '</span>'; }
     });
+    ensureVisible($('#ddAnswer'));
   }
   $('#ddSkip').addEventListener('click', function () { mark(false, true); });
 };

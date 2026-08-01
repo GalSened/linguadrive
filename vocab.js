@@ -127,17 +127,38 @@
     });
   }
 
+  /* neighbouring topic in the bank (for prev/next continuity) — dir = +1 | -1 */
+  function neighborTopic(kind, dir) {
+    var p = kind.split(':');
+    if (p[0] !== 'bank') return null;
+    var bank = bankOf();
+    if (!bank) return null;
+    for (var i = 0; i < bank.topics.length; i++) {
+      if (bank.topics[i].id === p[1]) {
+        var t = bank.topics[i + dir];
+        return t ? { kind: 'bank:' + t.id, he: t.he, icon: t.icon } : null;
+      }
+    }
+    return null;
+  }
+
   /* ---------- word list for one lesson / topic ---------- */
   function renderList(kind) {
     var data = listFor(kind);
     if (!data) { nav('words'); return; }
     var untracked = data.words.filter(function (w) { return !S.srs[w.key]; }).length;
+    var prevT = neighborTopic(kind, -1), nextT = neighborTopic(kind, 1);
     var html = '<button class="btn ghost" data-go="words" style="padding:.3rem .2rem;margin-bottom:.4rem">‹ כל המילים</button>' +
       '<h1 style="font-size:1.35rem;margin-bottom:.6rem">' + esc(data.title) + '</h1>' +
       '<div class="btnrow" style="margin-bottom:.8rem">' +
       '<button class="btn big primary" data-go="words/p:' + kind + '">🎲 תרגול חופשי</button>' +
       (untracked ? '<button class="btn big" id="wAddAll">➕ הכול לחזרות (' + untracked + ')</button>' : '') +
-      '</div><div class="card" id="wList">' + data.words.map(wordRow).join('') + '</div>';
+      '</div>' +
+      ((prevT || nextT) ? '<div class="btnrow" style="margin-bottom:.8rem">' +
+        (prevT ? '<button class="btn" data-go="words/t:' + prevT.kind + '">‹ ' + prevT.icon + ' ' + esc(prevT.he) + '</button>' : '') +
+        (nextT ? '<button class="btn" data-go="words/t:' + nextT.kind + '">' + nextT.icon + ' ' + esc(nextT.he) + ' ›</button>' : '') +
+        '</div>' : '') +
+      '<div class="card" id="wList">' + data.words.map(wordRow).join('') + '</div>';
     $('#view').innerHTML = html;
     bindWordRows($('#wList'));
     var all = $('#wAddAll');
@@ -164,13 +185,17 @@
   function renderPractice() {
     if (Prac.i >= Prac.items.length) {
       var n = Prac.items.length;
+      var nextT = neighborTopic(Prac.kind, 1);
       $('#view').innerHTML =
         '<div class="card" style="text-align:center"><div style="font-size:3rem">' + (Prac.right >= n * 0.8 ? '🏆' : '🎲') + '</div>' +
         '<h2>' + Prac.right + ' מתוך ' + n + '</h2>' +
         '<p class="small muted">תרגול חופשי · המילים לא יחזרו על עצמן עד שכל המאגר ימוצה</p></div>' +
         '<div class="btnrow"><button class="btn big" data-go="words">‹ לספרייה</button>' +
-        '<button class="btn big primary" id="pAgain">🎲 עוד סבב</button></div>';
+        '<button class="btn big primary" id="pAgain">🎲 עוד סבב</button></div>' +
+        (nextT ? '<button class="btn big" id="pNextTopic" style="width:100%;margin-top:.5rem">' + nextT.icon + ' הנושא הבא: ' + esc(nextT.he) + ' ›</button>' : '');
       $('#pAgain').addEventListener('click', function () { startPractice(Prac.kind); });
+      var pn = $('#pNextTopic');
+      if (pn) pn.addEventListener('click', function () { nav('words/p:' + nextT.kind); });
       return;
     }
     var w = Prac.items[Prac.i];
@@ -228,6 +253,7 @@
         },
         onVoiceIssue: function (txt) { $('#pScore').innerHTML = '<span class="small muted">' + esc(txt) + '</span>'; }
       });
+      ensureVisible($('#pAnswer'));
     }
     var show = $('#pShow');
     if (show) show.addEventListener('click', function () {
