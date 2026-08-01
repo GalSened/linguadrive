@@ -1,6 +1,6 @@
 /* LinguaDrive service worker — offline app shell + font caching */
 'use strict';
-var VERSION = 'linguadrive-v2.4.1';
+var VERSION = 'linguadrive-v2.5.0';
 var SHELL = [
   '.',
   'index.html',
@@ -10,10 +10,12 @@ var SHELL = [
   'content-es.js',
   'content-bank.js',
   'content-bank-es.js',
+  'audio-manifest.js',
   'cloud-config.js',
   'backend.js',
   'sync.js',
   'app.js',
+  'voice.js',
   'answers.js',
   'vocab.js',
   'account.js',

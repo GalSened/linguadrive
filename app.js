@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.4.1';
+var APP_VERSION = '2.5.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -336,8 +336,23 @@ var TTS = {
   speak: function (text, opt) {
     opt = opt || {};
     return new Promise(function (resolve) {
-      if (!TTS.supported || !text) return resolve(false);
-      if (opt.interrupt !== false) TTS.stop();
+      if (!text) return resolve(false);
+      /* real-voice files first (Voice.play): target-language text with a manifest hit plays a
+         studio mp3; anything else (Hebrew, sentences, misses, failures) falls through to synth */
+      var synth = function () {
+        if (!TTS.supported) return resolve(false);
+        if (opt.interrupt !== false) TTS.stop();
+        TTS._synth(text, opt, resolve);
+      };
+      if (window.Voice && opt.lang !== 'he') {
+        if (opt.interrupt !== false) TTS.stop();
+        Voice.play(text, { rate: opt.rate || S.settings.rate }).then(function (played) {
+          if (played) resolve(true); else synth();
+        });
+      } else synth();
+    });
+  },
+  _synth: function (text, opt, resolve) {
       var u = new SpeechSynthesisUtterance(text);
       var heb = opt.lang === 'he';
       u.lang = heb ? 'he-IL' : accentOf(S.settings.lang);
@@ -364,9 +379,9 @@ var TTS = {
       }, 10000);
       /* safety: some browsers never fire onend */
       setTimeout(function () { if (!done && !speechSynthesis.speaking) finish(); }, 12000 + text.length * 90);
-    });
   },
   stop: function () {
+    if (window.Voice) { try { Voice.stop(); } catch (e) { } }
     if (!TTS.supported) return;
     try { speechSynthesis.cancel(); } catch (e) { }
     TTS.speaking = false;

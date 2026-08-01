@@ -53,7 +53,7 @@ async function until(fn, ms, name) {
   /* ---- load scripts in order (as real Scripts, not eval) ---- */
   const ctx = dom.getInternalVMContext();
   for (const f of ['logic.js', 'merge.js', 'content.js', 'content-es.js', 'content-bank.js', 'content-bank-es.js',
-                   'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'answers.js', 'vocab.js', 'account.js']) {
+                   'audio-manifest.js', 'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'voice.js', 'answers.js', 'vocab.js', 'account.js']) {
     vm.runInContext(fs.readFileSync(f, 'utf8'), ctx, { filename: f });
     /* smoke exercises the LOCAL-ONLY path deliberately (cloud path has its own suite: cloud.test) */
     if (f === 'cloud-config.js') vm.runInContext('window.CLOUD_CONFIG = null;', ctx, { filename: 'smoke-override' });
@@ -395,6 +395,18 @@ async function until(fn, ms, name) {
   ok($('#setVoice'), 'voice select present');
   $('#testTTS').click(); await sleep(30);
   ok(spokenLog.some(t => t.includes('Hola')), 'ES sample spoken');
+
+  /* 11b. real-voice layer: manifest resolves, jsdom (no mp3 support) falls back to synth —
+     every spokenLog assertion above already proves the fallback carried the whole suite */
+  ok(!!w.Voice && typeof w.Voice.play === 'function', 'Voice layer loaded');
+  ok(typeof w.AUDIO_MANIFEST === 'object' && Object.keys(w.AUDIO_MANIFEST.en).length >= 490, 'audio manifest loaded (en)');
+  const vf = w.Voice.fileFor(w.CONTENT_EN.lessons[0].vocab[0].en);
+  ok(w.S.settings.lang === 'es' ? true : /^audio\/(en|es)\/[0-9a-f]{16}\.mp3$/.test(vf || ''), 'fileFor resolves a lesson word');
+  w.setAppLang('en', false);
+  ok(/^audio\/en\/[0-9a-f]{16}\.mp3$/.test(w.Voice.fileFor('hello') || ''), 'fileFor: en hello → hashed path');
+  const played = await w.Voice.play('hello');
+  ok(played === false, 'jsdom cannot play mp3 → play() honestly reports false (synth fallback)');
+  w.setAppLang('es', false);
 
   /* 12. persistence: reload window state from localStorage */
   const saved = JSON.parse(w.localStorage.getItem('endrive_v1'));

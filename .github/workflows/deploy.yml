@@ -18,6 +18,7 @@ jobs:
       - run: node tests/content.test.cjs
       - run: node tests/bank.selfcheck.cjs
       - run: node tests/answers.test.cjs
+      - run: node tests/audio.test.cjs
       - run: node tests/merge.test.cjs
       - run: node tests/cloud.test.cjs
       - run: node tests/static.test.cjs
