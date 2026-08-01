@@ -155,6 +155,35 @@
     };
   }
 
+  /* weak-words map: '{lang}:{norm}' → {n misses, s hit-streak, t ts}. Per-key LWW by t (the side
+     that saw the word more recently knows best); a key cleared on one device may resurrect once
+     from the other side, which is safe — it clears again after two clean hits. Capped by t. */
+  function mergeWeak(a, b) {
+    a = isObj(a) ? a : {}; b = isObj(b) ? b : {};
+    var out = {};
+    Object.keys(a).concat(Object.keys(b)).forEach(function (k) {
+      if (out[k]) return;
+      var x = isObj(a[k]) ? a[k] : null, y = isObj(b[k]) ? b[k] : null;
+      var w = (x && y) ? (num(x.t) >= num(y.t) ? x : y) : (x || y);
+      if (w) out[k] = { n: num(w.n), s: num(w.s), t: num(w.t) };
+    });
+    var keys = Object.keys(out);
+    if (keys.length > 300) {
+      keys.sort(function (p, q) { return num(out[q].t) - num(out[p].t); });
+      keys.slice(300).forEach(function (k) { delete out[k]; });
+    }
+    return out;
+  }
+
+  /* anti-repetition MRU windows are device-local ephemera — keep the LOCAL side (a), just
+     sanitize the shape so a corrupt cloud doc can never break selection */
+  function keepRecent(a, b) {
+    var r = isObj(a && a.recent) ? a.recent : (isObj(b && b.recent) ? b.recent : {});
+    var out = {};
+    Object.keys(r).forEach(function (k) { if (Array.isArray(r[k])) out[k] = r[k]; });
+    return out;
+  }
+
   /* dailyStreak follows lastDaily: the side that played the daily more recently carries the
      authoritative streak; identical lastDaily → max streak (same chain observed on both). */
   function mergeDailyStreak(a, b) {
@@ -201,6 +230,8 @@
         freeRoam: boolOr(a.freeRoam, b.freeRoam),
         entry: mergeFlatMax(a.entry, b.entry),
         counters: counters,
+        weak: mergeWeak(a.weak, b.weak),
+        recent: keepRecent(a, b),
         meta: {
           updatedAt: Math.max(aTs, bTs),
           settingsAt: Math.max(aSet, bSet),

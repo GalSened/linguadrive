@@ -332,6 +332,63 @@ async function until(fn, ms, name) {
   ok(w.Backend && w.Backend.enabled === false, 'Backend disabled without CLOUD_CONFIG');
   ok(w.Sync && w.Sync.state().status === 'off', 'Sync off without CLOUD_CONFIG');
 
+  /* 10g. TYPED TURBO — a full round with no speech recognition at all (voice never the only way) */
+  w.STT.supported = false;
+  w.S.settings.carStyle = 'turbo'; w.save();
+  $$('#bottomnav button').find(b => b.getAttribute('data-nav') === 'car').click();
+  await until(() => !$('#carScreen').classList.contains('hide'), 1000, 'car opens for typed turbo');
+  ok($('#carPrompt').textContent.includes('טורבו'), 'turbo offered without STT');
+  ok($('#carPrompt').textContent.includes('הקלדה'), 'typed answer channel offered');
+  ok(!$('#carPrompt').textContent.includes('🎙️ קול'), 'voice chip hidden without STT');
+  const typedScoreBefore = w.S.best.turbo_es || 0;
+  $('#carTap').click();
+  await until(() => w.Car.state === 'run' && w.Turbo.on, 1000, 'typed turbo starts');
+  (async () => {                       /* auto-player: type the right answer for each item */
+    while (w.Turbo.on) {
+      const inp = $('#tbType'), go = $('#tbGo');
+      if (inp && !inp.disabled && w.Turbo.cur) { inp.value = w.Turbo.cur.en; go && go.click(); }
+      await sleep(60);
+    }
+  })();
+  const tpDone = await until(() => w.Car.state === 'done', 12000, 'typed turbo completes');
+  if (tpDone) {
+    ok(w.Turbo.score > 0, 'typed turbo scored (' + w.Turbo.score + ')');
+    ok((w.S.best.turbo_es || 0) >= typedScoreBefore, 'typed turbo best persisted');
+  }
+  $('#carExit').click(); await sleep(50);
+  w.STT.supported = true;
+
+  /* 10h. WEAK WORDS — misses accumulate, hub offers a targeted round, two hits clear */
+  const weakWords = topic0.words.slice(0, 4);
+  weakWords.forEach(x => w.noteWordResult(x.en, false));
+  ok(Object.keys(w.S.weak).filter(k => k.indexOf('es:') === 0).length >= 4, 'weak map tracks missed words');
+  ok(w.weakPool().length >= 4, 'weak pool resolves back to word objects');
+  w.location.hash = 'words'; w.dispatchEvent(new w.Event('hashchange'));
+  await until(() => $('#wSearch'), 1500, 'words hub re-renders');
+  ok($('#view').textContent.includes('מילים חלשות'), 'hub shows the weak-words card');
+  w.location.hash = 'words/p:weak';
+  await until(() => $$('#view [data-pdir]').length === 2, 1500, 'weak round renders with direction chips');
+  w.location.hash = 'words'; await sleep(60);
+  w.noteWordResult(weakWords[0].en, true);
+  w.noteWordResult(weakWords[0].en, true);
+  ok(!w.S.weak['es:' + w.Logic.normalize(weakWords[0].en)], 'two clean hits clear a weak word');
+  ok(!!w.S.weak['es:' + w.Logic.normalize(weakWords[1].en)], 'other weak words remain');
+
+  /* 10i. LISTENING COMPREHENSION — hear the word, tap the Hebrew meaning */
+  w.S.settings.pracDir = 'listen'; w.save();
+  w.location.hash = 'words/p:bank:' + topic0.id;
+  await until(() => $('#pHear') && $$('#pListen .qopt').length >= 2, 2000, 'listen mode renders replay + options');
+  const heardEn = spokenLog[spokenLog.length - 1];
+  const heardW = w.vocabPool('all').find(x => x.en === heardEn);
+  ok(!!heardW, 'auto-played word resolves in the pool (heard: ' + heardEn + ')');
+  const rightHe = $$('#pListen .qopt').find(b => b.getAttribute('data-phe') === heardW.he);
+  ok(!!rightHe, 'correct Hebrew meaning among the options');
+  const listensBefore = w.S.counters.listens;
+  rightHe.click();
+  await until(() => w.S.counters.listens > listensBefore, 2500, 'listen answer counted as listening XP');
+  w.S.settings.pracDir = 'produce'; w.save();
+  w.location.hash = 'words'; await sleep(60);
+
   /* 11. settings render + voice test */
   w.location.hash = 'settings';
   await until(() => $('#setRate'), 1500, 'settings render');

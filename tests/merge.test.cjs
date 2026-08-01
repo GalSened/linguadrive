@@ -181,5 +181,39 @@ const M = (a, b) => Merge.mergeStates(a, b, DEFAULTS);
   ok(Merge.stateSize(cyc) === 0, 'stateSize safe on cyclic input');
 }
 
+/* --- 12. weak-words map: per-key LWW by t, union, cap, corrupt-safe --- */
+{
+  const a = D(), b = D();
+  a.weak = { 'en:dog': { n: 3, s: 0, t: 100 }, 'en:cat': { n: 1, s: 1, t: 500 } };
+  b.weak = { 'en:dog': { n: 1, s: 1, t: 900 }, 'es:perro': { n: 2, s: 0, t: 50 } };
+  const m = M(a, b);
+  ok(m.weak['en:dog'].n === 1 && m.weak['en:dog'].t === 900, 'weak per-key: newer t wins');
+  ok(m.weak['en:cat'].n === 1 && m.weak['es:perro'].n === 2, 'weak union across devices/langs');
+  const m2 = M(a, m);
+  eq(m2.weak, m.weak, 'weak idempotent re-merge');
+  /* corrupt entries dropped, never thrown */
+  const c = M({ weak: { k: 'oops', j: null } }, { weak: 7 });
+  ok(c.weak && Object.keys(c.weak).length === 0, 'corrupt weak entries dropped');
+  /* cap at 300 keeps the newest by t */
+  const big = D(); big.weak = {};
+  for (let i = 0; i < 350; i++) big.weak['en:w' + i] = { n: 1, s: 0, t: i };
+  const capped = M(big, D());
+  ok(Object.keys(capped.weak).length === 300, 'weak capped at 300');
+  ok(!capped.weak['en:w0'] && !!capped.weak['en:w349'], 'cap drops the stalest, keeps the newest');
+}
+
+/* --- 13. recent windows: device-local, kept from the LOCAL side, shape-sanitized --- */
+{
+  const a = D(), b = D();
+  a.recent = { turbo: ['x'], car: [], vocab: ['y'] };
+  b.recent = { turbo: ['remote1', 'remote2'], car: ['r'], vocab: [] };
+  const m = M(a, b);
+  eq(m.recent.turbo, ['x'], 'recent comes from the local side');
+  const m2 = M({ recent: { turbo: 'corrupt', vocab: ['ok'] } }, b);
+  ok(!m2.recent.turbo && JSON.stringify(m2.recent.vocab) === '["ok"]', 'corrupt recent arrays dropped, good ones kept');
+  const m3 = M({}, b);
+  eq(m3.recent.car, ['r'], 'no local recent → remote shape used');
+}
+
 console.log(fail === 0 ? '  ✅ merge: ' + pass + ' passed' : '  ❌ merge: ' + fail + ' failed / ' + (pass + fail));
 process.exitCode = fail ? 1 : 0;

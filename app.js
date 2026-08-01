@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.3.0';
+var APP_VERSION = '2.4.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -72,6 +72,8 @@ var DEFAULTS = {
     carSource: 'smart',     // smart | lesson | clinic
     carStyle: 'drill',      // drill | listen
     turboPool: 'learned',   // learned | all — how wide the Turbo word pool is
+    turboInput: 'voice',    // voice | type — Turbo answer channel (forced to type without STT)
+    pracDir: 'produce',     // produce (he → target) | listen (hear target → pick meaning)
     dailyGoal: 15, onDevice: false
   },
   lessons: {}, srs: {}, log: {}, lastLesson: '',
@@ -79,6 +81,7 @@ var DEFAULTS = {
   vehicle: '🚗', daily: null, dailyStreak: 0, lastDaily: '', freeRoam: false, entry: { en: 0, es: 0 },
   counters: { drills: 0, listens: 0, srs: 0, quizPerfects: 0, dialogues: 0, clinicHits: 0, minutes: 0, langs: {} },
   recent: { turbo: [], car: [], vocab: [] },   // anti-repetition MRU windows (per practice mode)
+  weak: {},                                    // '{lang}:{norm-en}' → {n misses, s hit-streak, t ts}
   meta: { updatedAt: 0, settingsAt: 0 }        // cloud-sync LWW timestamps
 };
 var S = load();
@@ -102,6 +105,7 @@ function load() {
     var rec = Object.assign({}, d.recent, s.recent || {});
     Object.keys(rec).forEach(function (k) { if (!Array.isArray(rec[k])) rec[k] = []; });
     s.recent = rec;
+    s.weak = (s.weak && typeof s.weak === 'object' && !Array.isArray(s.weak)) ? s.weak : {};
     return Object.assign(d, s, { settings: s.settings });
   } catch (e) { return JSON.parse(JSON.stringify(DEFAULTS)); }
 }
@@ -207,6 +211,45 @@ function topUpPool(pool, min) {
     (t.words || []).forEach(function (v, vi) { push(v.en, v.he, 'bank:' + S.settings.lang + ':' + t.id + ':' + vi); });
   });
   return pool;
+}
+/* ---- weak-words tracker: every answer surface reports here; two clean hits clear a word ---- */
+function weakKey(en) {
+  var n = Logic.normalize(en);
+  return n ? S.settings.lang + ':' + n : '';
+}
+function noteWordResult(en, hit) {
+  try {
+    var k = weakKey(en);
+    if (!k) return;
+    if (!S.weak) S.weak = {};
+    var w = S.weak[k];
+    if (hit) {
+      if (!w) return;
+      w.s = (w.s || 0) + 1; w.t = Date.now();
+      if (w.s >= 2) delete S.weak[k];
+    } else {
+      if (!w) w = S.weak[k] = { n: 0, s: 0, t: 0 };
+      w.n++; w.s = 0; w.t = Date.now();
+      var keys = Object.keys(S.weak);
+      if (keys.length > 300) {           /* cap: drop the stalest entry, keep sync doc small */
+        keys.sort(function (a, b) { return (S.weak[a].t || 0) - (S.weak[b].t || 0); });
+        delete S.weak[keys[0]];
+      }
+    }
+  } catch (e) { }
+}
+/* weak words of the ACTIVE language, resolved back to word objects, worst first */
+function weakPool() {
+  if (!S.weak) return [];
+  var byNorm = {};
+  vocabPool('all').forEach(function (w) { var k = Logic.normalize(w.en); if (!byNorm[k]) byNorm[k] = w; });
+  var pfx = S.settings.lang + ':';
+  return Object.keys(S.weak)
+    .filter(function (k) { return k.indexOf(pfx) === 0; })
+    .map(function (k) { return { w: byNorm[k.slice(pfx.length)], n: S.weak[k].n || 0 }; })
+    .filter(function (x) { return !!x.w; })
+    .sort(function (a, b) { return b.n - a.n; })
+    .map(function (x) { return x.w; });
 }
 function dueCards() {
   var now = Date.now(), out = [];
@@ -1232,6 +1275,7 @@ ROUTES.srs = function () {
     });
     function gradeCard(ok) {
       S.srs[key] = Logic.reviewCard(card, ok, Date.now());
+      noteWordResult(w.en, ok);
       save(); logActivity(1, 0);
       gameEvent('srs', 1, { ok: ok });
       srsQueue.shift();
@@ -1386,7 +1430,7 @@ Car.renderConfig = function () {
   };
   var srcOpts = [['smart', '🧠 מיקס חכם'], ['lesson', '📗 השיעור הנוכחי'], ['clinic', '🗣️ קליניקת הגייה']];
   var styleOpts = [['drill', '🎙️ תרגול דיבור'], ['listen', '🎧 האזנה בלבד']];
-  if (STT.supported) styleOpts.push(['turbo', '🏁 טורבו 60']);
+  styleOpts.push(['turbo', '🏁 טורבו 60']);   /* voice is never the only way: turbo has a typed mode */
   var modeOpts = [['repeat', '🔁 חזור אחריי'], ['translate', '🇮🇱→' + activeLang().flag + ' תרגם מעברית']];
   var html = '<div style="font-size:1.15rem;font-weight:700;margin-bottom:.8rem">' + activeLang().flag + ' סשן ' + activeLang().name + ' בנסיעה</div>' +
     '<div class="kicker">מה מתרגלים</div>' + chips(srcOpts, s.carSource, 'csrc') +
@@ -1394,12 +1438,17 @@ Car.renderConfig = function () {
   if (s.carStyle === 'drill' && TTS.he) html += '<div class="kicker" style="margin-top:.9rem">סגנון התרגול</div>' + chips(modeOpts, s.carMode, 'cmode');
   if (s.carStyle === 'drill' && !STT.supported) html += '<div class="small" style="color:var(--danger);margin-top:.8rem">אין זיהוי דיבור בדפדפן הזה — עוברים להאזנה בלבד</div>';
   if (s.carStyle === 'turbo') {
+    var inOpts = [];
+    if (STT.supported) inOpts.push(['voice', '🎙️ קול']);
+    inOpts.push(['type', '⌨️ הקלדה']);
     html += '<div class="kicker" style="margin-top:.9rem">אילו מילים</div>' +
       chips([['learned', '📗 מהשיעורים שלי'], ['all', '🌍 כל אוצר המילים']], s.turboPool === 'all' ? 'all' : 'learned', 'cpool') +
+      '<div class="kicker" style="margin-top:.9rem">איך עונים</div>' + chips(inOpts, Turbo.inputMode(), 'cinput') +
       '<div class="small muted" style="margin-top:.8rem">🏁 60 שניות: אני אומר בעברית — אתה עונה מהר ב' + activeLang().name + '. רצף תשובות = קומבו שמכפיל נקודות. השיא שלך: <b class="en" style="direction:ltr">' + (S.best['turbo_' + s.lang] || 0) + '</b></div>';
+    if (!STT.supported) html += '<div class="small muted" style="margin-top:.4rem">אין זיהוי דיבור בדפדפן הזה — טורבו רץ בהקלדה</div>';
   }
   $('#carPrompt').innerHTML = html;
-  $('#carState').textContent = 'העיניים על הכביש — האוזניים איתי. הכול קולי.';
+  $('#carState').textContent = STT.supported ? 'העיניים על הכביש — האוזניים איתי. הכול קולי.' : 'אין זיהוי דיבור בדפדפן הזה — נתרגל בהאזנה ובהקלדה.';
   $('#carScore').textContent = '';
   $('#carLane').innerHTML = '';
   $('#carClock').textContent = '';
@@ -1408,6 +1457,7 @@ Car.renderConfig = function () {
   $$('#carPrompt [data-cstyle]').forEach(function (b) { b.addEventListener('click', function () { S.settings.carStyle = b.getAttribute('data-cstyle'); save(); Car.renderConfig(); }); });
   $$('#carPrompt [data-cmode]').forEach(function (b) { b.addEventListener('click', function () { S.settings.carMode = b.getAttribute('data-cmode'); save(); Car.renderConfig(); }); });
   $$('#carPrompt [data-cpool]').forEach(function (b) { b.addEventListener('click', function () { S.settings.turboPool = b.getAttribute('data-cpool'); save(); Car.renderConfig(); }); });
+  $$('#carPrompt [data-cinput]').forEach(function (b) { b.addEventListener('click', function () { S.settings.turboInput = b.getAttribute('data-cinput'); save(); Car.renderConfig(); }); });
 };
 
 Car.buildItems = function () {
@@ -1645,10 +1695,49 @@ Turbo.comboLane = function () {
   for (var i = 0; i < 5; i++) html += '<i class="' + (i < Math.min(Turbo.combo, 5) ? 'on' : '') + '"></i>';
   $('#carLane').innerHTML = html;
 };
+/* answer channel: voice when the browser has STT and the user chose it; typed otherwise */
+Turbo.inputMode = function () {
+  if (!STT.supported) return 'type';
+  return S.settings.turboInput === 'type' ? 'type' : 'voice';
+};
 Turbo.show = function (item) {
-  $('#carPrompt').innerHTML =
+  var typed = Turbo.inputMode() === 'type';
+  var html =
     '<span style="display:block;font-size:2rem;font-weight:800">' + esc(item.he) + '</span>' +
-    '<span class="small muted" style="display:block;margin-top:.35rem">אמור ב' + activeLang().name + '</span>';
+    '<span class="small muted" style="display:block;margin-top:.35rem">' + (typed ? 'הקלד ב' : 'אמור ב') + activeLang().name + '</span>';
+  if (typed) html += '<div style="display:flex;gap:.5rem;margin-top:.6rem;direction:ltr">' +
+    '<input type="text" id="tbType" dir="ltr" autocomplete="off" autocapitalize="none" spellcheck="false" style="flex:1;font-size:1.1rem;min-width:0">' +
+    '<button class="btn primary" id="tbGo" style="flex:none">✓</button></div>';
+  $('#carPrompt').innerHTML = html;
+};
+/* resolves {typed:'...'} | {timeout:true} | {cmd:'stop|repeat|slow|skip'}; freezes the round
+   clock while paused so a pause never eats the answer window */
+Turbo.typedAnswer = function (budgetMs) {
+  return new Promise(function (resolve) {
+    var inp = $('#tbType'), go = $('#tbGo');
+    if (!inp) return resolve({ timeout: true });
+    var done = false, t = null;
+    var finish = function (r) {
+      if (done) return; done = true;
+      if (t) clearInterval(t);
+      try { inp.disabled = true; if (go) go.disabled = true; } catch (e) { }
+      resolve(r);
+    };
+    var submit = function () {
+      var v = (inp.value || '').trim();
+      if (v) finish({ typed: v }); else { try { inp.focus(); } catch (e) { } }
+    };
+    if (go) go.addEventListener('click', submit);
+    inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); submit(); } });
+    setTimeout(function () { try { inp.focus(); } catch (e) { } }, 60);
+    var end = Date.now() + budgetMs;
+    t = setInterval(function () {
+      if (!Car.active) return finish({ timeout: true });
+      if (Car.paused) { end += 120; Turbo.endAt += 120; return; }
+      if (Car.cmd && Car.cmd !== 'stop') { var c = Car.cmd; Car.cmd = null; return finish({ cmd: c }); }
+      if (Date.now() >= end) finish({ timeout: true });
+    }, 120);
+  });
 };
 Turbo.start = function () {
   Turbo.items = Turbo.pool();
@@ -1691,17 +1780,29 @@ Turbo.loop = async function () {
       else Beep.tick();
       if (Date.now() >= Turbo.endAt || !Car.active || Car.gen !== g) break;
       Beep.go();
-      Car.setState('🎤 עכשיו!', true);
-      var res = await STT.listen({ timeout: Math.max(1500, Math.min(6500, Turbo.endAt - Date.now())) });
-      if (!Car.active || Car.gen !== g) return;
-      var cmd = matchCmd(res.alts);
-      if (cmd === 'stop') { Car.pauseToggle(); continue; }
-      if (cmd === 'repeat') continue;
-      if (cmd === 'slow') { try { await TTS.speak(item.en, { rate: 0.7 }); } catch (e) { } Turbo.idx++; continue; }
-      if (cmd === 'skip') { Turbo.combo = 0; Turbo.comboLane(); Turbo.idx++; continue; }
-      if (res.ok) {
-        var r = Logic.bestScore(item.en, res.alts);
-        if (r.score >= 60) {
+      var typedMode = Turbo.inputMode() === 'type';
+      Car.setState(typedMode ? '⌨️ עכשיו!' : '🎤 עכשיו!', !typedMode);
+      var r = null;   /* null = no answer (timeout/noise); else {ok:boolean, score:number} */
+      if (typedMode) {
+        var ta = await Turbo.typedAnswer(Math.max(2500, Math.min(12000, Turbo.endAt - Date.now())));
+        if (!Car.active || Car.gen !== g) return;
+        if (ta.cmd === 'repeat') continue;
+        if (ta.cmd === 'slow') { try { await TTS.speak(item.en, { rate: 0.7 }); } catch (e) { } Turbo.idx++; continue; }
+        if (ta.cmd === 'skip') { Turbo.combo = 0; Turbo.comboLane(); Turbo.idx++; continue; }
+        if (ta.typed) { var tm = Logic.typedMatch(item.en, ta.typed); r = { ok: tm.ok, score: tm.score }; }
+      } else {
+        var res = await STT.listen({ timeout: Math.max(1500, Math.min(6500, Turbo.endAt - Date.now())) });
+        if (!Car.active || Car.gen !== g) return;
+        var cmd = matchCmd(res.alts);
+        if (cmd === 'stop') { Car.pauseToggle(); continue; }
+        if (cmd === 'repeat') continue;
+        if (cmd === 'slow') { try { await TTS.speak(item.en, { rate: 0.7 }); } catch (e) { } Turbo.idx++; continue; }
+        if (cmd === 'skip') { Turbo.combo = 0; Turbo.comboLane(); Turbo.idx++; continue; }
+        if (res.ok) { var bs = Logic.bestScore(item.en, res.alts); r = { ok: bs.score >= 60, score: bs.score }; }
+      }
+      if (r) {
+        noteWordResult(item.en, r.ok);
+        if (r.ok) {
           Turbo.combo++;
           var gain = Logic.turboGain(Turbo.combo);
           Turbo.score += gain;
@@ -1876,6 +1977,7 @@ ROUTES.daily = function () {
   var marked = false;
   function mark(hit, revealSpeak) {
     if (marked) return; marked = true;
+    noteWordResult(item.en, hit);
     run.marks.push(hit ? '🟩' : '🟥');
     $('#dReveal').textContent = item.en;
     $('#dFb').innerHTML = hit ? '<b style="color:var(--ok)">✓ ' + pick(CONTENT.praiseHe) + '</b>' : '<b style="color:var(--danger)">✗</b>';

@@ -42,8 +42,8 @@ const man = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
 man.icons.forEach(i => ok(fs.existsSync(i.src), 'manifest icon exists: ' + i.src));
 
 // version discipline: bump both together
-ok(app.includes("var APP_VERSION = '2.3.0'"), 'app version 2.3.0');
-ok(sw.includes('linguadrive-v2.3.0'), 'sw cache version bumped in lockstep');
+ok(app.includes("var APP_VERSION = '2.4.0'"), 'app version 2.4.0');
+ok(sw.includes('linguadrive-v2.4.0'), 'sw cache version bumped in lockstep');
 
 // fixed-nav occlusion guard (bug found live 2026-08-01: mic under bottomnav ate clicks)
 ok(app.includes('function ensureVisible'), 'ensureVisible helper exists');
@@ -84,8 +84,30 @@ ok(!app.includes('S.settings.accent ') && !app.includes("S.settings.accent="), '
 const answers = fs.readFileSync('answers.js', 'utf8');
 ok(answers.includes("'type'") && answers.includes("'choice'"), 'typing + 4-choice modes exist');
 ok(app.includes('ddAnswer'), 'daily challenge mounts the answer component');
-ok(fs.readFileSync('vocab.js', 'utf8').includes('pAnswer'), 'free practice mounts the answer component');
+ok(vocab.includes('pAnswer'), 'free practice mounts the answer component');
 ok(app.includes('srsTypeGo'), 'SRS has a typed check');
+// v2.4.0: Turbo has a typed channel — no STT gate on the turbo option
+ok(app.includes('Turbo.inputMode'), 'turbo input-mode selector exists');
+ok(app.includes('Turbo.typedAnswer'), 'turbo typed answer path exists');
+ok(app.includes('data-cinput'), 'turbo config offers the answer-channel chips');
+ok(app.includes("turboInput: 'voice'"), 'turboInput default present');
+ok(!app.includes("if (STT.supported) styleOpts.push(['turbo'"), 'turbo option no longer hidden without STT');
+
+// v2.4.0: listening-comprehension direction in vocab practice
+ok(vocab.includes('data-pdir'), 'practice offers direction chips');
+ok(vocab.includes("pracDir === 'listen'") || vocab.includes("=== 'listen'"), 'listen direction branch exists');
+ok(vocab.includes('pHear'), 'listen mode has a replay button');
+ok(vocab.includes('data-phe'), 'listen mode answers with Hebrew choices');
+ok(app.includes("pracDir: 'produce'"), 'pracDir default present');
+
+// v2.4.0: weak-words tracker feeds from every answer surface, hub offers a targeted round
+ok(app.includes('function noteWordResult'), 'weak-words tracker exists');
+ok(app.includes('function weakPool'), 'weak pool resolver exists');
+ok((app.match(/noteWordResult\(/g) || []).length >= 4, 'tracker wired at 4+ answer sites (srs/daily/turbo)');
+ok(vocab.includes('noteWordResult'), 'vocab practice reports to the tracker');
+ok(vocab.includes("data-go=\"words/p:weak\"") || vocab.includes('words/p:weak'), 'hub links the weak-words round');
+ok(fs.readFileSync('merge.js', 'utf8').includes('mergeWeak'), 'cloud merge carries the weak map');
+ok(fs.readFileSync('merge.js', 'utf8').includes('keepRecent'), 'cloud merge preserves local recent windows');
 
 // CI runs every suite
 ['logic','content','answers','merge','cloud','static','smoke'].forEach(t =>

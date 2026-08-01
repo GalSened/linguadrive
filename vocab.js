@@ -32,6 +32,7 @@
 
   function poolFor(kind) {
     if (kind === 'all') return vocabPool('all');
+    if (kind === 'weak') return weakPool();
     var l = listFor(kind);
     return l ? l.words : [];
   }
@@ -59,6 +60,15 @@
         '<span style="font-size:1.9rem">🃏</span>' +
         '<span class="grow"><b>יש ' + due + ' מילים שמחכות לחזרה</b><span class="small muted" style="display:block">חזרה בזמן = מילה שנשארת בראש</span></span>' +
         '<b style="color:var(--danger)">›</b></button>';
+    }
+
+    /* words the learner keeps missing — a targeted round clears them (two clean hits each) */
+    var wk = weakPool();
+    if (wk.length >= 3) {
+      html += '<button class="card" data-go="words/p:weak" style="width:100%;text-align:right;display:flex;align-items:center;gap:.8rem;cursor:pointer">' +
+        '<span style="font-size:1.9rem">🎯</span>' +
+        '<span class="grow"><b>' + wk.length + ' מילים חלשות</b><span class="small muted" style="display:block">מילים שפוספסו לאחרונה — סבב ממוקד מחזיר אותן</span></span>' +
+        '<b style="color:var(--accent)">›</b></button>';
     }
 
     html += '<button class="btn big primary" data-go="words/p:all" style="margin-bottom:1rem">🎲 תרגול חופשי — מכל האוצר</button>';
@@ -200,16 +210,36 @@
     }
     var w = Prac.items[Prac.i];
     Prac.revealed = false;
+    var dir = S.settings.pracDir === 'listen' ? 'listen' : 'produce';
     var html = '<button class="btn ghost" data-go="words" style="padding:.3rem .2rem;margin-bottom:.4rem">✕ סיום</button>' +
       laneProgress(Prac.i, Prac.items.length) +
-      '<div class="card" style="text-align:center;margin-top:.6rem">' +
-      '<div class="small muted">מילה ' + (Prac.i + 1) + '/' + Prac.items.length + ' · איך אומרים ב' + langName() + '?</div>' +
-      '<div style="font-size:2rem;font-weight:800;margin:.7rem 0">' + esc(w.he) + '</div>' +
-      '<div id="pReveal" style="min-height:3.2rem"></div>' +
-      '<div id="pScore" class="scorebox"></div></div>';
-    html += '<div id="pAnswer"></div>' +
-      '<button class="btn" id="pShow" style="width:100%;margin-top:.5rem">👁 לא יודע — הצג</button>';
+      '<div class="chips" style="justify-content:center;margin:.3rem 0 .1rem">' +
+      '<button class="chip ' + (dir === 'produce' ? 'on' : '') + '" data-pdir="produce">🗣️ עברית → ' + langName() + '</button>' +
+      '<button class="chip ' + (dir === 'listen' ? 'on' : '') + '" data-pdir="listen">🎧 הבנת שמיעה</button></div>';
+    if (dir === 'listen') {
+      html += '<div class="card" style="text-align:center;margin-top:.4rem">' +
+        '<div class="small muted">מילה ' + (Prac.i + 1) + '/' + Prac.items.length + ' · הקשב — מה המשמעות?</div>' +
+        '<button class="playbtn" id="pHear" style="font-size:2.2rem;margin:.5rem 0" aria-label="השמע שוב">🔊</button>' +
+        '<div id="pReveal" style="min-height:3.2rem"></div>' +
+        '<div id="pScore" class="scorebox"></div></div>' +
+        '<div id="pListen"></div>';
+    } else {
+      html += '<div class="card" style="text-align:center;margin-top:.4rem">' +
+        '<div class="small muted">מילה ' + (Prac.i + 1) + '/' + Prac.items.length + ' · איך אומרים ב' + langName() + '?</div>' +
+        '<div style="font-size:2rem;font-weight:800;margin:.7rem 0">' + esc(w.he) + '</div>' +
+        '<div id="pReveal" style="min-height:3.2rem"></div>' +
+        '<div id="pScore" class="scorebox"></div></div>' +
+        '<div id="pAnswer"></div>';
+    }
+    html += '<button class="btn" id="pShow" style="width:100%;margin-top:.5rem">👁 לא יודע — הצג</button>';
     $('#view').innerHTML = html;
+
+    $$('#view [data-pdir]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        S.settings.pracDir = b.getAttribute('data-pdir'); save();
+        renderPractice();
+      });
+    });
 
     var marked = false;
     function reveal(speak) {
@@ -217,6 +247,7 @@
       Prac.revealed = true;
       var full = w.key ? cardWord(w.key) : null;
       $('#pReveal').innerHTML = '<span class="en" style="font-size:1.5rem;font-weight:700;display:block">' + esc(w.en) + '</span>' +
+        (dir === 'listen' ? '<span style="display:block;font-weight:700;margin-top:.2rem">' + esc(w.he) + '</span>' : '') +
         (full && full.t ? '<span class="vt">' + esc(full.t) + '</span>' : '') +
         (full && full.ex ? '<span class="small muted en" style="display:block;margin-top:.3rem">' + esc(full.ex) + '</span>' : '') +
         (w.key && !S.srs[w.key] ? '<div><button class="btn" id="pAdd" style="margin-top:.4rem">➕ לחזרות</button></div>' : '');
@@ -227,19 +258,53 @@
       });
     }
     /* single mark path — guarded so no input mode can double-count.
-       recall strength: voice/typing = production (drill XP); 4-choice = recognition (srs XP) */
+       recall strength: voice/typing = production (drill XP); 4-choice = recognition (srs XP);
+       listening comprehension = listen XP. Every result feeds the weak-words tracker. */
     function mark(hit, method) {
       if (marked) return; marked = true;
       if (hit) { Prac.right++; Beep.good(); } else Beep.bad();
       Logic.pushRecent(S.recent.vocab, Logic.normalize(w.en), 150);
+      noteWordResult(w.en, hit);
       logActivity(1, 0);
-      if (method === 'choice') gameEvent('srs', 1, { ok: hit });
+      if (method === 'listen') gameEvent('listen', 1);
+      else if (method === 'choice') gameEvent('srs', 1, { ok: hit });
       else gameEvent('drill', 1, { score: hit ? 100 : 0 });
       if (w.key && S.srs[w.key]) { S.srs[w.key] = Logic.reviewCard(S.srs[w.key], hit, Date.now()); save(); }
       Prac.i++;
       setTimeout(renderPractice, hit ? 700 : 1500);
     }
-    if (window.Answers) {
+    if (dir === 'listen') {
+      var hear = $('#pHear');
+      if (hear) hear.addEventListener('click', function () { TTS.speak(w.en); });
+      TTS.speak(w.en);
+      /* 4 Hebrew meanings — comprehension is answered by tapping, so voice is never required */
+      var seenHe = {}, opts = [];
+      seenHe[w.he] = 1;
+      shuffle(poolFor(Prac.kind).concat(vocabPool('all'))).forEach(function (c) {
+        if (opts.length >= 3 || !c.he || seenHe[c.he]) return;
+        if (Logic.normalize(c.en) === Logic.normalize(w.en)) return;
+        seenHe[c.he] = 1; opts.push(c.he);
+      });
+      opts.push(w.he);
+      opts = shuffle(opts);
+      $('#pListen').innerHTML = opts.map(function (o) {
+        return '<button class="qopt" data-phe="' + esc(o) + '">' + esc(o) + '</button>';
+      }).join('');
+      $$('#pListen [data-phe]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          if (marked) return;
+          var okC = b.getAttribute('data-phe') === w.he;
+          $$('#pListen [data-phe]').forEach(function (x) {
+            x.disabled = true;
+            if (x.getAttribute('data-phe') === w.he) x.classList.add('right');
+          });
+          if (!okC) b.classList.add('wrong');
+          reveal(false);
+          mark(okC, 'listen');
+        });
+      });
+      ensureVisible($('#pListen'));
+    } else if (window.Answers) {
       Answers.render($('#pAnswer'), {
         prefix: 'p',
         target: w,
