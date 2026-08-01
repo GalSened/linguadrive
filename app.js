@@ -221,10 +221,11 @@ function tone(freq, dur, when, type, vol) {
   o.connect(g); g.connect(ctx.destination);
   o.start(ctx.currentTime + when); o.stop(ctx.currentTime + when + dur + 0.05);
 }
+function buzz(pattern) { try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) { } }
 var Beep = {
   go: function () { tone(880, 0.12, 0, 'sine'); },
-  good: function () { tone(660, 0.1, 0); tone(990, 0.14, 0.11); },
-  bad: function () { tone(220, 0.22, 0, 'triangle'); },
+  good: function () { tone(660, 0.1, 0); tone(990, 0.14, 0.11); buzz(25); },
+  bad: function () { tone(220, 0.22, 0, 'triangle'); buzz([60, 40, 60]); },
   tick: function () { tone(520, 0.05, 0, 'sine', 0.08); }
 };
 
@@ -389,6 +390,25 @@ function render() {
   updateBadges();
 }
 window.addEventListener('hashchange', render);
+/* keyboard support (desktop UX): 1-4 answer quiz options, Enter advances, Space flips a flashcard */
+document.addEventListener('keydown', function (ev) {
+  if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
+  if (ev.key >= '1' && ev.key <= '4') {
+    var opts = $$('#qOpts .qopt');
+    var idx = +ev.key - 1;
+    if (opts.length && opts[idx] && !opts[idx].disabled) { opts[idx].click(); ev.preventDefault(); }
+    return;
+  }
+  if (ev.key === 'Enter') {
+    var next = $('#qNext') || $('#tNext') || $('#dNext');
+    if (next) { next.click(); ev.preventDefault(); }
+    return;
+  }
+  if (ev.key === ' ') {
+    var flash = $('#flash');
+    if (flash) { flash.click(); ev.preventDefault(); }
+  }
+});
 $$('#bottomnav button').forEach(function (b) {
   b.addEventListener('click', function () {
     var k = b.getAttribute('data-nav');
