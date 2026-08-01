@@ -1,0 +1,9 @@
+{
+  "name": "linguadrive",
+  "version": "2.1.0",
+  "private": true,
+  "description": "LinguaDrive — voice-first English/Spanish learning game for Hebrew speakers (PWA, no build step)",
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  }
+}

@@ -1,13 +1,21 @@
 /* LinguaDrive service worker — offline app shell + font caching */
 'use strict';
-var VERSION = 'linguadrive-v2.0.0';
+var VERSION = 'linguadrive-v2.1.0';
 var SHELL = [
   '.',
   'index.html',
   'logic.js',
+  'merge.js',
   'content.js',
   'content-es.js',
+  'content-bank.js',
+  'content-bank-es.js',
+  'cloud-config.js',
+  'backend.js',
+  'sync.js',
   'app.js',
+  'vocab.js',
+  'account.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

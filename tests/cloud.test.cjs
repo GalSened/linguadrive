@@ -1,7 +1,7 @@
 'use strict';
-/* cloud.test — backend.js (Firebase REST client) + sync.js engine against a fake in-process
-   server: auth flows, token refresh & session death, Firestore encode/decode, error mapping,
-   offline degradation, push/pull-merge orchestration. No network. */
+/* cloud.test — backend.js (Supabase REST client) + sync.js engine against a fake in-process
+   GoTrue/PostgREST server: auth flows, refresh-token rotation & session death, RLS-shaped
+   responses, error mapping, offline degradation, push/pull-merge orchestration. No network. */
 let pass = 0, fail = 0;
 function ok(c, n) { if (c) pass++; else { fail++; console.log('  ✗ FAIL:', n); } }
 console.log('▶ cloud.test');
@@ -17,70 +17,97 @@ globalThis.localStorage = {
 const handlers = {};
 globalThis.addEventListener = (ev, fn) => { (handlers[ev] = handlers[ev] || []).push(fn); };
 const fireStorage = key => (handlers.storage || []).forEach(fn => fn({ key }));
-globalThis.CLOUD_CONFIG = { provider: 'firebase', apiKey: 'FAKE_KEY', projectId: 'fake-proj' };
 
-/* fake server */
+globalThis.CLOUD_CONFIG = { provider: 'supabase', url: 'https://fake.supabase.co', anonKey: 'FAKE_ANON' };
+
+/* ---------- fake Supabase server ---------- */
 const calls = [];
-let failMode = null; /* null | 'offline' | {code, status} for auth | 'expired-refresh' */
-const db = { users: {}, boards: {} }; /* uid → fields ; board → uid → fields */
-let tokenCounter = 0;
+let failMode = null; /* null | 'offline' | 'expired-refresh' */
+const db = {
+  users: {},        /* email → {id, password, name} */
+  state: {},        /* uid → row */
+  scores: {}        /* board → uid → row */
+};
+let tokenCounter = 0, refreshCounter = 0;
+const liveTokens = {};   /* access token → uid */
+const liveRefresh = {};  /* refresh token → uid */
 
+function uidFor(email) { return 'uid-' + email.replace(/[^a-z0-9]/gi, ''); }
 function jres(status, body) {
   return Promise.resolve({ ok: status >= 200 && status < 300, status, text: () => Promise.resolve(JSON.stringify(body)) });
+}
+function session(uid, email, name) {
+  const at = 'at' + (++tokenCounter), rt = 'rt' + (++refreshCounter);
+  liveTokens[at] = uid; liveRefresh[rt] = uid;
+  return { access_token: at, refresh_token: rt, expires_in: 3600, token_type: 'bearer',
+    user: { id: uid, email, user_metadata: { name } } };
 }
 globalThis.fetch = function (url, opts) {
   calls.push({ url, opts });
   if (failMode === 'offline') return Promise.reject(new TypeError('fetch failed'));
-  const body = opts && opts.body && opts.headers && String(opts.headers['Content-Type']).includes('json') ? JSON.parse(opts.body) : null;
+  const body = opts && opts.body ? JSON.parse(opts.body) : null;
+  const auth = (opts && opts.headers && opts.headers.Authorization || '').replace('Bearer ', '');
 
-  if (url.includes('accounts:signUp')) {
-    if (db.users['u_' + body.email]) return jres(400, { error: { message: 'EMAIL_EXISTS' } });
-    db.users['u_' + body.email] = { password: body.password, displayName: '' };
-    return jres(200, { localId: 'u_' + body.email, email: body.email, idToken: 'tok' + (++tokenCounter), refreshToken: 'ref_' + body.email, expiresIn: '3600' });
+  if (url.includes('/auth/v1/signup')) {
+    if (db.users[body.email]) return jres(422, { code: 422, error_code: 'user_already_exists', msg: 'User already registered' });
+    if ((body.password || '').length < 6) return jres(422, { code: 422, error_code: 'weak_password', msg: 'weak' });
+    const uid = uidFor(body.email);
+    db.users[body.email] = { id: uid, password: body.password, name: (body.data && body.data.name) || '' };
+    return jres(200, session(uid, body.email, db.users[body.email].name));
   }
-  if (url.includes('accounts:update')) {
-    const u = Object.values(db.users)[0];
-    if (u) u.displayName = body.displayName;
-    return jres(200, {});
+  if (url.includes('/auth/v1/token?grant_type=password')) {
+    const u = db.users[body.email];
+    if (!u || u.password !== body.password) return jres(400, { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' });
+    return jres(200, session(u.id, body.email, u.name));
   }
-  if (url.includes('accounts:signInWithPassword')) {
-    const u = db.users['u_' + body.email];
-    if (!u || u.password !== body.password) return jres(400, { error: { message: 'INVALID_LOGIN_CREDENTIALS' } });
-    return jres(200, { localId: 'u_' + body.email, email: body.email, displayName: u.displayName, idToken: 'tok' + (++tokenCounter), refreshToken: 'ref_' + body.email, expiresIn: '3600' });
+  if (url.includes('/auth/v1/token?grant_type=refresh_token')) {
+    if (failMode === 'expired-refresh') return jres(400, { code: 400, error_code: 'refresh_token_not_found', msg: 'Invalid Refresh Token' });
+    const uid = liveRefresh[body.refresh_token];
+    if (!uid) return jres(400, { code: 400, error_code: 'refresh_token_not_found', msg: 'Invalid Refresh Token' });
+    delete liveRefresh[body.refresh_token]; /* rotation: old refresh token dies */
+    const email = Object.keys(db.users).find(e => db.users[e].id === uid);
+    return jres(200, session(uid, email, db.users[email].name));
   }
-  if (url.includes('accounts:sendOobCode')) return jres(200, { email: body.email });
-  if (url.includes('accounts:delete')) { return jres(200, {}); }
-  if (url.includes('securetoken.googleapis.com')) {
-    if (failMode === 'expired-refresh') return jres(400, { error: { message: 'INVALID_REFRESH_TOKEN' } });
-    return jres(200, { id_token: 'tok' + (++tokenCounter), refresh_token: 'refreshed', expires_in: '3600', user_id: 'u_x' });
+  if (url.includes('/auth/v1/recover')) return jres(200, {});
+
+  if (url.includes('/rest/v1/rpc/delete_own_account')) {
+    const uid = liveTokens[auth];
+    if (!uid) return jres(401, { code: 401, msg: 'no session' });
+    const email = Object.keys(db.users).find(e => db.users[e].id === uid);
+    delete db.users[email]; delete db.state[uid];
+    Object.values(db.scores).forEach(b => delete b[uid]); /* FK cascade */
+    return jres(204, null);
   }
-  /* Firestore */
-  const m = url.match(/documents\/users\/([^/?]+)$/);
-  if (m && (!opts || !opts.method || opts.method === 'GET')) {
-    const doc = db.users[decodeURIComponent(m[1]) + '_doc'];
-    if (!doc) return jres(404, { error: { message: 'NOT_FOUND', status: 'NOT_FOUND' } });
-    return jres(200, { name: 'projects/fake-proj/databases/(default)/documents/users/' + m[1], fields: doc });
+  if (url.includes('/rest/v1/user_state')) {
+    const uid = liveTokens[auth];
+    if (!uid) return jres(200, []); /* RLS: anon sees nothing */
+    if (!opts.method || opts.method === 'GET') {
+      const m = url.match(/uid=eq\.([^&]+)/);
+      const row = db.state[decodeURIComponent(m[1])];
+      return jres(200, row && m[1].includes(uid) ? [row] : []);
+    }
+    if (opts.method === 'POST') {
+      if (body.uid !== uid) return jres(403, { code: '42501', message: 'RLS violation' });
+      db.state[uid] = body;
+      return jres(201, null);
+    }
   }
-  if (m && opts.method === 'PATCH') {
-    db.users[decodeURIComponent(m[1]) + '_doc'] = JSON.parse(opts.body).fields;
-    return jres(200, {});
-  }
-  const bm = url.match(/documents\/boards\/([^/]+)\/e\/([^/?]+)$/);
-  if (bm && opts.method === 'PATCH') {
-    db.boards[bm[1]] = db.boards[bm[1]] || {};
-    db.boards[bm[1]][bm[2]] = JSON.parse(opts.body).fields;
-    return jres(200, {});
-  }
-  const qm = url.match(/documents\/boards\/([^/:]+):runQuery$/);
-  if (qm) {
-    const entries = Object.entries(db.boards[qm[1]] || {});
-    const rows = entries
-      .map(([uid, f]) => ({ document: { name: 'p/d/documents/boards/' + qm[1] + '/e/' + uid, fields: f } }))
-      .sort((a, b) => (+b.document.fields.s.integerValue) - (+a.document.fields.s.integerValue));
-    rows.push({ readTime: 'x' }); /* Firestore appends a no-document row — client must filter */
+  if (url.includes('/rest/v1/scores')) {
+    const uid = liveTokens[auth];
+    if (opts.method === 'POST') {
+      if (!uid || body.uid !== uid) return jres(403, { code: '42501', message: 'RLS violation' });
+      if (!/^(daily-(en|es)-\d{4}-\d{2}-\d{2}|turbo-(en|es))$/.test(body.board)) return jres(400, { code: '23514', message: 'board_format' });
+      if (body.board.startsWith('daily-') && body.s > 10) return jres(400, { code: '23514', message: 'daily_cap' });
+      (db.scores[body.board] = db.scores[body.board] || {})[body.uid] = body;
+      return jres(201, null);
+    }
+    if (!uid) return jres(200, []); /* RLS: signed-in only */
+    const m = url.match(/board=eq\.([^&]+)/);
+    const rows = Object.values(db.scores[decodeURIComponent(m[1])] || {})
+      .sort((a, b) => b.s - a.s || a.t - b.t);
     return jres(200, rows);
   }
-  return jres(500, { error: { message: 'UNHANDLED_' + url } });
+  return jres(500, { code: 500, msg: 'UNHANDLED ' + url });
 };
 
 const Backend = require('../backend.js');
@@ -95,52 +122,57 @@ Backend.onChange(u => authEvents.push(u ? u.uid : null));
   /* --- 1. register --- */
   let r = await Backend.register('דנה', 'dana@test.com', 'secret1');
   ok(r.ok === true, 'register ok');
-  ok(Backend.user() && Backend.user().uid === 'u_dana@test.com', 'user() after register');
-  ok(Backend.user().name === 'דנה', 'display name kept');
+  ok(Backend.user() && Backend.user().uid === uidFor('dana@test.com'), 'user() after register');
+  ok(Backend.user().name === 'דנה', 'display name from user_metadata');
   ok(!!store.endrive_auth_v1, 'session persisted to localStorage');
-  ok(authEvents.length === 1 && authEvents[0] === 'u_dana@test.com', 'onChange fired on register');
-  ok(calls.some(c => c.url.includes('accounts:update')), 'profile displayName call made');
+  ok(authEvents.length === 1, 'onChange fired on register');
 
-  /* duplicate email */
+  /* duplicate email + weak password + wrong creds mapping */
   r = await Backend.register('אחר', 'dana@test.com', 'other22');
-  ok(r.ok === false && r.code === 'EMAIL_EXISTS', 'duplicate email surfaces EMAIL_EXISTS');
-  ok(Backend.errorHe(r.code).includes('כבר רשום'), 'EMAIL_EXISTS Hebrew message');
+  ok(r.ok === false && r.code === 'user_already_exists', 'duplicate email code');
+  ok(Backend.errorHe(r.code).includes('כבר רשום'), 'duplicate email Hebrew');
+  r = await Backend.register('חלש', 'weak@test.com', '123');
+  ok(r.ok === false && Backend.errorHe(r.code).includes('חלשה'), 'weak password Hebrew');
 
   /* --- 2. logout + login --- */
   await Backend.logout();
   ok(Backend.user() === null && !store.endrive_auth_v1, 'logout clears session');
   r = await Backend.login('dana@test.com', 'WRONG');
-  ok(r.ok === false && Backend.errorHe(r.code).includes('שגויים'), 'wrong password Hebrew mapping');
+  ok(r.ok === false && Backend.errorHe(r.code).includes('שגויים'), 'wrong password Hebrew');
   r = await Backend.login('dana@test.com', 'secret1');
   ok(r.ok && Backend.user().name === 'דנה', 'login restores display name');
 
-  /* --- 3. user doc roundtrip --- */
+  /* --- 3. user state roundtrip --- */
   const state = { xp: 42, lessons: { l1: { done: true } }, meta: { updatedAt: 111, settingsAt: 111 } };
   r = await Backend.saveUserDoc(JSON.stringify(state), 'דנה', '2.1.0', 1);
   ok(r.ok, 'saveUserDoc ok');
   r = await Backend.loadUserDoc();
   ok(r.ok && r.exists && r.state && r.state.xp === 42, 'loadUserDoc roundtrip');
-  ok(r.name === 'דנה' && typeof r.updatedAt === 'number', 'doc metadata decoded');
+  ok(r.name === 'דנה' && typeof r.updatedAt === 'number', 'row metadata decoded');
 
-  /* missing doc */
-  db.users['u_dana@test.com_doc'] && delete db.users['u_dana@test.com_doc'];
+  /* missing row */
+  delete db.state[uidFor('dana@test.com')];
   r = await Backend.loadUserDoc();
-  ok(r.ok && r.exists === false, '404 → exists:false (not an error)');
+  ok(r.ok && r.exists === false, 'empty result → exists:false (not an error)');
 
-  /* --- 4. token refresh --- */
-  const sess = JSON.parse(store.endrive_auth_v1);
+  /* --- 4. token refresh with ROTATION --- */
+  let sess = JSON.parse(store.endrive_auth_v1);
+  const oldRefresh = sess.refreshToken;
   sess.expiresAt = Date.now() - 1000; store.endrive_auth_v1 = JSON.stringify(sess);
-  fireStorage('endrive_auth_v1'); /* browser would fire this for a cross-tab change */
+  fireStorage('endrive_auth_v1');
   calls.length = 0;
   r = await Backend.saveUserDoc('{"xp":1}', 'דנה', '2.1.0', 1);
   ok(r.ok, 'call succeeds after expiry');
-  ok(calls.some(c => c.url.includes('securetoken')), 'refresh endpoint hit');
-  const fsCall = calls.find(c => c.url.includes('documents/users'));
-  ok(fsCall && fsCall.opts.headers.Authorization.startsWith('Bearer tok'), 'fresh Bearer used');
+  ok(calls.some(c => c.url.includes('grant_type=refresh_token')), 'refresh endpoint hit');
+  sess = JSON.parse(store.endrive_auth_v1);
+  ok(sess.refreshToken !== oldRefresh, 'rotated refresh token stored');
+  const restCall = calls.find(c => c.url.includes('/rest/v1/user_state'));
+  ok(restCall && restCall.opts.headers.Authorization.startsWith('Bearer at'), 'fresh Bearer used');
+  ok(restCall && restCall.opts.headers.apikey === 'FAKE_ANON', 'apikey header always present');
 
   /* refresh token dead → clean signout */
-  const sess2 = JSON.parse(store.endrive_auth_v1);
-  sess2.expiresAt = Date.now() - 1000; store.endrive_auth_v1 = JSON.stringify(sess2);
+  sess = JSON.parse(store.endrive_auth_v1);
+  sess.expiresAt = Date.now() - 1000; store.endrive_auth_v1 = JSON.stringify(sess);
   fireStorage('endrive_auth_v1');
   failMode = 'expired-refresh';
   authEvents = [];
@@ -154,29 +186,37 @@ Backend.onChange(u => authEvents.push(u ? u.uid : null));
   await Backend.login('dana@test.com', 'secret1');
   r = await Backend.submitScore('daily-en-2026-08-01', 9.6);
   ok(r.ok, 'submitScore ok');
-  const f = db.boards['daily-en-2026-08-01']['u_dana%40test.com'] || db.boards['daily-en-2026-08-01']['u_dana@test.com'];
-  ok(f && f.s.integerValue === '10', 'score rounded to int');
-  /* second player via raw db */
-  db.boards['daily-en-2026-08-01']['u_other'] = { n: { stringValue: 'יוסי' }, s: { integerValue: '7' }, t: { integerValue: '5' } };
+  ok(db.scores['daily-en-2026-08-01'][uidFor('dana@test.com')].s === 10, 'score rounded to int');
+  db.scores['daily-en-2026-08-01']['uid-other'] = { board: 'daily-en-2026-08-01', uid: 'uid-other', n: 'יוסי', s: 7, t: 5 };
   r = await Backend.topScores('daily-en-2026-08-01', 10);
-  ok(r.ok && r.rows.length === 2, 'topScores returns 2 rows (no-document row filtered)');
+  ok(r.ok && r.rows.length === 2, 'topScores returns rows');
   ok(r.rows[0].s === 10 && r.rows[1].n === 'יוסי', 'ordering + decode');
+  /* server-side validation is enforced (simulating the CHECK constraints) */
+  r = await Backend.submitScore('daily-en-2026-08-01', 99);
+  ok(r.ok === false && r.code === '23514', 'daily cap enforced server-side');
 
   /* --- 6. offline degradation --- */
   failMode = 'offline';
   r = await Backend.loadUserDoc();
-  ok(r.ok === false && (r.code === 'offline'), 'network fail → offline code');
+  ok(r.ok === false && r.code === 'offline', 'network fail → offline code');
   ok(Backend.errorHe('offline').includes('אין חיבור'), 'offline Hebrew message');
   ok(Backend.user() !== null, 'offline does NOT sign out');
   failMode = null;
 
-  /* --- 7. typed value encode/decode --- */
-  const { fv, unfv } = Backend._internals;
-  ok(unfv(fv('a')) === 'a' && unfv(fv(5)) === 5 && unfv(fv(1.5)) === 1.5 && unfv(fv(true)) === true, 'fv/unfv roundtrip');
-  ok(fv(7).integerValue === '7', 'int encoded as string per Firestore spec');
+  /* --- 7. account deletion (re-auth + RPC + cascade) --- */
+  await Backend.register('זמני', 'temp@test.com', 'temppass1');
+  await Backend.saveUserDoc('{"xp":3}', 'זמני', '2.1.0', 1);
+  await Backend.submitScore('turbo-en', 100);
+  r = await Backend.deleteAccount('WRONG');
+  ok(r.ok === false && r.code === 'invalid_credentials', 'delete requires correct password');
+  r = await Backend.deleteAccount('temppass1');
+  ok(r.ok === true, 'delete succeeds with password');
+  ok(Backend.user() === null, 'session cleared after delete');
+  ok(!db.users['temp@test.com'] && !db.state[uidFor('temp@test.com')], 'user + state cascaded');
+  ok(!(db.scores['turbo-en'] || {})[uidFor('temp@test.com')], 'scores cascaded');
 
   /* --- 8. Sync engine --- */
-  await Backend.logout(); /* init from a signed-out state so init's auto-pull cannot race the assertions */
+  await Backend.logout(); /* init from signed-out so init's auto-pull cannot race the assertions */
   let appState = { xp: 10, meta: { updatedAt: 1, settingsAt: 1 },
     settings: { lang: 'en' }, lessons: {}, srs: {}, log: {}, ach: {}, boss: {}, best: {}, entry: {}, counters: { langs: {} } };
   let setStateCalls = 0;
@@ -191,7 +231,6 @@ Backend.onChange(u => authEvents.push(u ? u.uid : null));
   await Backend.login('dana@test.com', 'secret1');
   await new Promise(res => setTimeout(res, 50)); /* let the login-triggered pull settle */
   const baseCalls = setStateCalls;
-  /* seed a cloud state with more xp */
   const cloud = { xp: 99, meta: { updatedAt: 2, settingsAt: 2 }, settings: { lang: 'es' }, lessons: {}, srs: {}, log: {}, ach: {}, boss: {}, best: {}, entry: {}, counters: { langs: {} } };
   await Backend.saveUserDoc(JSON.stringify(cloud), 'דנה', '2.1.0', 1);
   r = await Sync.pullMerge(true);
@@ -199,8 +238,8 @@ Backend.onChange(u => authEvents.push(u ? u.uid : null));
   ok(appState.xp === 99, 'merge took cloud max xp');
   ok(appState.settings.lang === 'es', 'newer cloud settings won');
   ok(Sync.state().status === 'synced', 'status synced after pull+push');
-  const savedBack = JSON.parse((await Backend.loadUserDoc()).state ? JSON.stringify((await Backend.loadUserDoc()).state) : '{}');
-  ok(savedBack.xp === 99, 'merged state pushed back to cloud');
+  const backRow = db.state[uidFor('dana@test.com')];
+  ok(backRow && JSON.parse(backRow.state).xp === 99, 'merged state pushed back to cloud');
 
   /* busy defers pull */
   busy = true;
@@ -208,7 +247,7 @@ Backend.onChange(u => authEvents.push(u ? u.uid : null));
   ok(r.deferred === true && setStateCalls === baseCalls + 1, 'busy app defers pull (no mid-game clobber)');
   busy = false;
 
-  /* offline push → pending, no crash */
+  /* offline push → pending, then retry succeeds */
   failMode = 'offline';
   appState.xp = 120;
   r = await Sync.pushNow();
@@ -219,7 +258,6 @@ Backend.onChange(u => authEvents.push(u ? u.uid : null));
   ok(r.ok === true && Sync.state().status === 'synced', 'retry after connectivity succeeds');
   ok(Sync.statusHe().length > 0, 'statusHe returns text');
 
-  /* logout resets */
   await Backend.logout();
   ok(['idle', 'off'].includes(Sync.state().status), 'logout → idle');
 

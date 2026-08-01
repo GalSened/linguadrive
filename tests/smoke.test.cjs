@@ -52,11 +52,17 @@ async function until(fn, ms, name) {
 
   /* ---- load scripts in order (as real Scripts, not eval) ---- */
   const ctx = dom.getInternalVMContext();
-  for (const f of ['logic.js', 'content.js', 'content-es.js', 'app.js']) vm.runInContext(fs.readFileSync(f, 'utf8'), ctx, { filename: f });
+  for (const f of ['logic.js', 'merge.js', 'content.js', 'content-es.js', 'content-bank.js', 'content-bank-es.js',
+                   'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'vocab.js', 'account.js']) {
+    vm.runInContext(fs.readFileSync(f, 'utf8'), ctx, { filename: f });
+    /* smoke exercises the LOCAL-ONLY path deliberately (cloud path has its own suite: cloud.test) */
+    if (f === 'cloud-config.js') vm.runInContext('window.CLOUD_CONFIG = null;', ctx, { filename: 'smoke-override' });
+  }
 
   const $ = sel => d.querySelector(sel), $$ = sel => [...d.querySelectorAll(sel)];
 
-  /* 1. onboarding appears */
+  /* 1. onboarding appears (boot is deferred to DOMContentLoaded) */
+  await until(() => w.S && !$('#overlay').classList.contains('hide'), 2000, 'boot + onboarding sheet shown');
   ok(!$('#overlay').classList.contains('hide'), 'onboarding sheet shown on first run');
   ok($('#sheet').textContent.includes('LinguaDrive'), 'onboarding branded');
   $('#obGo').click();
@@ -254,6 +260,56 @@ async function until(fn, ms, name) {
   w.STT.listen = dailyListen;
   w.confetti();
   ok($$('.confetti').length >= 1, 'confetti renders');
+
+  /* 10d. WORDS hub: library, search, topic pack, free practice (in Spanish) */
+  w.location.hash = 'words';
+  await until(() => $('#wSearch'), 1500, 'words hub renders');
+  ok($$('#view .gcar').length >= 15, 'topic packs grid shows 15+ topics');
+  ok($('#view').textContent.includes('מילים זמינות'), 'hub stats rendered');
+  $('#wSearch').value = w.VOCAB_BANK_ES.topics[0].words[0].en;
+  $('#wSearch').dispatchEvent(new w.Event('input'));
+  await sleep(80);
+  ok($$('#wSearchOut .vrow').length >= 1, 'search finds a bank word');
+
+  const topic0 = w.VOCAB_BANK_ES.topics[0];
+  w.location.hash = 'words/t:bank:' + topic0.id;
+  await until(() => $('#wList'), 1500, 'topic word list renders');
+  ok($$('#wList .vrow').length === topic0.words.length, 'all topic words listed');
+  const srsBefore = Object.keys(w.S.srs).length;
+  $('#wAddAll').click(); await sleep(80);
+  ok(Object.keys(w.S.srs).length === srsBefore + topic0.words.length, 'add-all tracks the whole topic in SRS');
+  ok(!!w.S.srs['bank:es:' + topic0.id + ':0'], 'bank SRS key format');
+  ok(w.cardWord('bank:es:' + topic0.id + ':0').en === topic0.words[0].en, 'bank card resolves');
+
+  w.location.hash = 'words/p:bank:' + topic0.id;
+  await until(() => $('#pShow'), 1500, 'free practice starts');
+  $('#pShow').click(); await sleep(50);
+  ok($('#pYes'), 'reveal shows grading buttons');
+  const recBefore = w.S.recent.vocab.length;
+  $('#pYes').click();
+  await until(() => w.S.recent.vocab.length > recBefore, 2000, 'practice feeds anti-repeat window');
+
+  /* 10e. variety: turbo pool is wide and honors the recent window */
+  w.setAppLang('en', false);
+  const pool1 = w.Turbo.pool();
+  ok(pool1.length >= 20, 'turbo pool >= 20 (was 12 pre-variety), got ' + pool1.length);
+  w.S.settings.turboPool = 'all';
+  const poolAll = w.Turbo.pool();
+  ok(poolAll.length >= 100, 'turbo all-pool spans the whole word universe, got ' + poolAll.length);
+  w.S.settings.turboPool = 'learned';
+  w.S.recent.turbo = pool1.slice(0, 10).map(x => w.Logic.normalize(x.en));
+  const pool2 = w.Turbo.pool();
+  const overlap = pool2.filter(x => w.S.recent.turbo.includes(w.Logic.normalize(x.en))).length;
+  ok(overlap === 0 || pool2.length >= pool1.length, 'recent words excluded until bag resets (overlap=' + overlap + ')');
+  w.S.recent.turbo = [];
+  w.setAppLang('es', false);
+
+  /* 10f. boards route: cloud disabled in this environment → honest empty state */
+  w.location.hash = 'boards';
+  await until(() => $('#view').textContent.includes('טבלת השיאים'), 1500, 'boards route renders');
+  ok($('#view').textContent.includes('לא הופעלו'), 'disabled-cloud state explained');
+  ok(w.Backend && w.Backend.enabled === false, 'Backend disabled without CLOUD_CONFIG');
+  ok(w.Sync && w.Sync.state().status === 'off', 'Sync off without CLOUD_CONFIG');
 
   /* 11. settings render + voice test */
   w.location.hash = 'settings';

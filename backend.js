@@ -1,10 +1,16 @@
 /* LinguaDrive — cloud backend (auth + storage), swappable provider behind one interface.
  *
- * Implementation: Firebase Auth (identitytoolkit) + Cloud Firestore, spoken over their public
- * REST APIs with plain fetch — zero SDK, zero build step, fully offline-tolerant. If
+ * Implementation: Supabase (GoTrue auth + PostgREST with Row Level Security), spoken over its
+ * public REST API with plain fetch — zero SDK, zero build step, fully offline-tolerant. If
  * cloud-config.js provides no config, the game runs exactly as before (local-only) and the
  * account UI explains that sync is off. Every method resolves to {ok:true,...} or
  * {ok:false, code, he} — it NEVER throws across the boundary and NEVER rejects.
+ *
+ * Server-side contract (created at provision time, see README):
+ *   table user_state(uid pk→auth.users, name, state text, updated_at, v, schema) — RLS: own row only
+ *   table scores(board, uid, n, s, t; pk board+uid)  — RLS: read=signed-in, write=own row;
+ *     checks: score 0..5000, daily boards ≤10, board name regex, name length 1..30
+ *   rpc delete_own_account()  — security definer, deletes auth user + cascades
  *
  * Swap providers by replacing this file (keep the exported surface) — the app talks only to:
  *   Backend.enabled, Backend.user(), Backend.onChange(cb),
@@ -47,10 +53,11 @@
         return res.text().then(function (txt) {
           clearTimeout(timer);
           var body = safeParse(txt);
-          if (res.ok) return resolve({ ok: true, data: body });
-          var code = (body && body.error && (body.error.message || body.error.status)) || ('HTTP_' + res.status);
-          code = String(code).split(' ')[0].split(':')[0]; /* 'WEAK_PASSWORD : ...' → 'WEAK_PASSWORD' */
-          resolve({ ok: false, code: code, status: res.status });
+          if (res.ok) return resolve({ ok: true, data: body, status: res.status });
+          /* GoTrue: {error_code, msg} · PostgREST: {code, message} · fallback: HTTP status */
+          var code = (body && (body.error_code || body.code || body.error)) || ('HTTP_' + res.status);
+          if (res.status === 429) code = 'rate_limited';
+          resolve({ ok: false, code: String(code), status: res.status, msg: body && (body.msg || body.message) });
         });
       }).catch(function (e) {
         clearTimeout(timer);
@@ -59,8 +66,16 @@
       });
     });
   }
-  function postJson(url, obj) {
-    return req(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
+
+  function base() { return String(CFG.url).replace(/\/+$/, ''); }
+  function headers(idToken, extra) {
+    var h = { 'Content-Type': 'application/json', 'apikey': CFG.anonKey };
+    h.Authorization = 'Bearer ' + (idToken || CFG.anonKey);
+    if (extra) Object.keys(extra).forEach(function (k) { h[k] = extra[k]; });
+    return h;
+  }
+  function authPost(path, obj) {
+    return req(base() + '/auth/v1' + path, { method: 'POST', headers: headers(), body: JSON.stringify(obj) });
   }
 
   /* ---------- auth session persistence ---------- */
@@ -72,7 +87,7 @@
   }
   function saveSession(s) { mem = s; if (s) lsSet(AUTH_KEY, JSON.stringify(s)); else lsDel(AUTH_KEY); }
 
-  /* cross-tab: another tab logged in/out → adopt + notify */
+  /* cross-tab: another tab logged in/out or rotated the refresh token → adopt + notify */
   try {
     root.addEventListener('storage', function (ev) {
       if (!ev || ev.key !== AUTH_KEY) return;
@@ -80,73 +95,51 @@
     });
   } catch (e) { }
 
+  /* GoTrue session payload → stored session (refresh tokens ROTATE — always store the new one) */
   function applyAuthPayload(d, fallbackName) {
+    var u = d.user || {};
+    var metaName = (u.user_metadata && u.user_metadata.name) || '';
     var s = {
-      uid: d.localId || d.user_id || (mem && mem.uid),
-      email: d.email || (mem && mem.email) || '',
-      name: d.displayName || fallbackName || (mem && mem.name) || '',
-      idToken: d.idToken || d.id_token,
-      refreshToken: d.refreshToken || d.refresh_token,
-      expiresAt: now() + (parseInt(d.expiresIn || d.expires_in || '3600', 10) - 300) * 1000
+      uid: u.id || (mem && mem.uid),
+      email: u.email || (mem && mem.email) || '',
+      name: metaName || fallbackName || (mem && mem.name) || '',
+      idToken: d.access_token,
+      refreshToken: d.refresh_token,
+      expiresAt: now() + (parseInt(d.expires_in || '3600', 10) - 300) * 1000
     };
     saveSession(s);
     return s;
   }
 
-  /* valid idToken or {ok:false} — refreshes when near expiry; refresh-token death = signout */
+  /* valid access token or {ok:false} — refreshes near expiry; refresh-token death = signout */
   function token() {
     var s = loadSession();
     if (!s) return Promise.resolve({ ok: false, code: 'signed-out' });
     if (s.idToken && now() < s.expiresAt) return Promise.resolve({ ok: true, idToken: s.idToken });
-    var body = 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(s.refreshToken);
-    return req('https://securetoken.googleapis.com/v1/token?key=' + CFG.apiKey, {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body
-    }).then(function (r) {
+    return authPost('/token?grant_type=refresh_token', { refresh_token: s.refreshToken }).then(function (r) {
       if (r.ok) { var ns = applyAuthPayload(r.data); return { ok: true, idToken: ns.idToken }; }
-      if (r.code === 'offline' || r.code === 'timeout') return { ok: false, code: r.code };
-      /* TOKEN_EXPIRED / USER_DISABLED / USER_NOT_FOUND / INVALID_REFRESH_TOKEN → session is dead */
+      if (r.code === 'offline' || r.code === 'timeout' || r.code === 'rate_limited') return { ok: false, code: r.code };
+      /* refresh_token_not_found / already_used / user deleted → session is dead */
       saveSession(null); emit();
       return { ok: false, code: 'signed-out' };
     });
   }
 
-  /* ---------- Firestore REST encode/decode ---------- */
-  function fsBase() { return 'https://firestore.googleapis.com/v1/projects/' + CFG.projectId + '/databases/(default)/documents'; }
-  function fv(v) { /* JS → Firestore typed value (only the types we use) */
-    if (typeof v === 'string') return { stringValue: v };
-    if (typeof v === 'boolean') return { booleanValue: v };
-    if (typeof v === 'number') return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
-    return { stringValue: String(v) };
-  }
-  function unfv(f) { /* Firestore typed value → JS */
-    if (!f) return null;
-    if ('stringValue' in f) return f.stringValue;
-    if ('integerValue' in f) return parseInt(f.integerValue, 10);
-    if ('doubleValue' in f) return f.doubleValue;
-    if ('booleanValue' in f) return f.booleanValue;
-    return null;
-  }
-  function decodeDoc(doc) {
-    var out = {};
-    var fields = (doc && doc.fields) || {};
-    Object.keys(fields).forEach(function (k) { out[k] = unfv(fields[k]); });
-    if (doc && doc.name) out.__id = doc.name.split('/').pop();
-    return out;
-  }
-  function authedFs(method, path, bodyObj, query) {
+  function rest(method, path, bodyObj, prefer) {
     return token().then(function (t) {
       if (!t.ok) return t;
-      return req(fsBase() + path + (query || ''), {
+      var extra = prefer ? { Prefer: prefer } : null;
+      return req(base() + '/rest/v1' + path, {
         method: method,
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + t.idToken },
-        body: bodyObj ? JSON.stringify(bodyObj) : undefined
+        headers: headers(t.idToken, extra),
+        body: bodyObj != null ? JSON.stringify(bodyObj) : undefined
       });
     });
   }
 
   /* ---------- public API ---------- */
   var api = {
-    enabled: !!(CFG && CFG.apiKey && CFG.projectId),
+    enabled: !!(CFG && CFG.url && CFG.anonKey),
 
     user: function () {
       var s = loadSession();
@@ -156,27 +149,21 @@
 
     register: function (name, email, password) {
       if (!api.enabled) return Promise.resolve({ ok: false, code: 'disabled' });
-      return postJson('https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + CFG.apiKey,
-        { email: email, password: password, returnSecureToken: true }
-      ).then(function (r) {
+      return authPost('/signup', { email: email, password: password, data: { name: name } }).then(function (r) {
         if (!r.ok) return r;
+        if (!r.data || !r.data.access_token) {
+          /* email confirmation unexpectedly on — treat as config problem, not silence */
+          return { ok: false, code: 'confirm_required' };
+        }
         applyAuthPayload(r.data, name);
-        /* attach display name; a failure here must not fail the registration */
-        return postJson('https://identitytoolkit.googleapis.com/v1/accounts:update?key=' + CFG.apiKey,
-          { idToken: r.data.idToken, displayName: name, returnSecureToken: false }
-        ).then(function () {
-          var s = loadSession(); if (s) { s.name = name; saveSession(s); }
-          emit();
-          return { ok: true, user: api.user() };
-        });
+        emit();
+        return { ok: true, user: api.user() };
       });
     },
 
     login: function (email, password) {
       if (!api.enabled) return Promise.resolve({ ok: false, code: 'disabled' });
-      return postJson('https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + CFG.apiKey,
-        { email: email, password: password, returnSecureToken: true }
-      ).then(function (r) {
+      return authPost('/token?grant_type=password', { email: email, password: password }).then(function (r) {
         if (!r.ok) return r;
         applyAuthPayload(r.data);
         emit();
@@ -188,75 +175,65 @@
 
     resetPassword: function (email) {
       if (!api.enabled) return Promise.resolve({ ok: false, code: 'disabled' });
-      return postJson('https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=' + CFG.apiKey,
-        { requestType: 'PASSWORD_RESET', email: email });
+      return authPost('/recover', { email: email });
     },
 
-    /* destructive: requires the password again (fresh credential), then deletes auth user.
-       The Firestore user doc becomes orphaned-but-unreachable (rules bind to the dead uid). */
+    /* destructive: verify the password again (fresh login), then the security-definer RPC
+       deletes the auth user; FK cascades wipe user_state + scores server-side. */
     deleteAccount: function (password) {
       var s = loadSession();
       if (!s) return Promise.resolve({ ok: false, code: 'signed-out' });
-      return postJson('https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + CFG.apiKey,
-        { email: s.email, password: password, returnSecureToken: true }
-      ).then(function (r) {
+      return authPost('/token?grant_type=password', { email: s.email, password: password }).then(function (r) {
         if (!r.ok) return r;
-        return postJson('https://identitytoolkit.googleapis.com/v1/accounts:delete?key=' + CFG.apiKey,
-          { idToken: r.data.idToken }
-        ).then(function (dr) {
+        var freshTok = r.data.access_token;
+        return req(base() + '/rest/v1/rpc/delete_own_account', {
+          method: 'POST', headers: headers(freshTok), body: '{}'
+        }).then(function (dr) {
           if (dr.ok) { saveSession(null); emit(); }
           return dr;
         });
       });
     },
 
-    /* ---- per-user state document: users/{uid} ---- */
+    /* ---- per-user state row ---- */
     loadUserDoc: function () {
       var s = loadSession();
       if (!s) return Promise.resolve({ ok: false, code: 'signed-out' });
-      return authedFs('GET', '/users/' + encodeURIComponent(s.uid)).then(function (r) {
-        if (r.ok) {
-          var d = decodeDoc(r.data);
-          var state = safeParse(d.state);
-          return { ok: true, exists: true, state: state, name: d.name || '', updatedAt: d.updatedAt || 0 };
-        }
-        if (r.status === 404) return { ok: true, exists: false, state: null };
-        return r;
+      return rest('GET', '/user_state?uid=eq.' + encodeURIComponent(s.uid) + '&select=state,name,updated_at').then(function (r) {
+        if (!r.ok) return r;
+        var row = Array.isArray(r.data) ? r.data[0] : null;
+        if (!row) return { ok: true, exists: false, state: null };
+        return { ok: true, exists: true, state: safeParse(row.state), name: row.name || '', updatedAt: row.updated_at || 0 };
       });
     },
 
     saveUserDoc: function (stateJson, name, appVersion, schema) {
       var s = loadSession();
       if (!s) return Promise.resolve({ ok: false, code: 'signed-out' });
-      var body = { fields: {
-        state: fv(stateJson), name: fv(name || s.name || ''), updatedAt: fv(now()),
-        v: fv(appVersion || ''), schema: fv(schema || 1)
-      } };
-      return authedFs('PATCH', '/users/' + encodeURIComponent(s.uid), body);
+      return rest('POST', '/user_state', {
+        uid: s.uid, name: name || s.name || '', state: stateJson,
+        updated_at: now(), v: appVersion || '', schema: schema || 1
+      }, 'resolution=merge-duplicates');
     },
 
-    /* ---- leaderboards: boards/{board}/e/{uid} with fields n(name) s(score) t(ts) ---- */
+    /* ---- leaderboards ---- */
     submitScore: function (board, score) {
       var s = loadSession();
       if (!s) return Promise.resolve({ ok: false, code: 'signed-out' });
-      var body = { fields: { n: fv((s.name || 'שחקן').slice(0, 24)), s: fv(Math.max(0, Math.round(score))), t: fv(now()) } };
-      return authedFs('PATCH', '/boards/' + encodeURIComponent(board) + '/e/' + encodeURIComponent(s.uid), body);
+      return rest('POST', '/scores', {
+        board: board, uid: s.uid,
+        n: (s.name || 'שחקן').slice(0, 24) || 'שחקן',
+        s: Math.max(0, Math.round(score)), t: now()
+      }, 'resolution=merge-duplicates');
     },
 
     topScores: function (board, limit) {
-      var q = { structuredQuery: {
-        from: [{ collectionId: 'e' }],
-        orderBy: [{ field: { fieldPath: 's' }, direction: 'DESCENDING' }, { field: { fieldPath: 't' }, direction: 'ASCENDING' }],
-        limit: limit || 50
-      } };
-      return authedFs('POST', '/boards/' + encodeURIComponent(board) + ':runQuery', q).then(function (r) {
+      return rest('GET', '/scores?board=eq.' + encodeURIComponent(board) +
+        '&select=uid,n,s,t&order=s.desc,t.asc&limit=' + (limit || 50)).then(function (r) {
         if (!r.ok) return r;
-        var rows = (Array.isArray(r.data) ? r.data : [])
-          .filter(function (x) { return x && x.document; })
-          .map(function (x) {
-            var d = decodeDoc(x.document);
-            return { uid: d.__id, n: d.n || 'שחקן', s: d.s || 0, t: d.t || 0 };
-          });
+        var rows = (Array.isArray(r.data) ? r.data : []).map(function (d) {
+          return { uid: d.uid, n: d.n || 'שחקן', s: d.s || 0, t: d.t || 0 };
+        });
         return { ok: true, rows: rows };
       });
     },
@@ -264,24 +241,29 @@
     /* Hebrew user-facing error text for every code this module can produce */
     errorHe: function (code) {
       switch (code) {
-        case 'EMAIL_EXISTS': return 'האימייל הזה כבר רשום — נסה להתחבר';
-        case 'EMAIL_NOT_FOUND': case 'INVALID_PASSWORD': case 'INVALID_LOGIN_CREDENTIALS':
+        case 'user_already_exists': case 'email_exists':
+          return 'האימייל הזה כבר רשום — נסה להתחבר';
+        case 'invalid_credentials': case 'invalid_grant':
           return 'אימייל או סיסמה שגויים';
-        case 'WEAK_PASSWORD': return 'הסיסמה חלשה מדי — לפחות 6 תווים';
-        case 'INVALID_EMAIL': case 'MISSING_EMAIL': return 'כתובת האימייל לא תקינה';
-        case 'TOO_MANY_ATTEMPTS_TRY_LATER': return 'יותר מדי ניסיונות — חכה כמה דקות ונסה שוב';
-        case 'USER_DISABLED': return 'החשבון הזה הושבת';
-        case 'OPERATION_NOT_ALLOWED': case 'PASSWORD_LOGIN_DISABLED': return 'ההרשמה לא מופעלת כרגע בשרת';
+        case 'weak_password': return 'הסיסמה חלשה מדי — לפחות 6 תווים';
+        case 'validation_failed': return 'כתובת האימייל לא תקינה';
+        case 'rate_limited': case 'over_request_rate_limit': case 'over_email_send_rate_limit':
+          return 'יותר מדי ניסיונות — חכה כמה דקות ונסה שוב';
+        case 'user_banned': return 'החשבון הזה הושבת';
+        case 'email_not_confirmed': case 'confirm_required':
+          return 'האימייל עוד לא אומת — בדוק את תיבת הדואר';
+        case 'signup_disabled': return 'ההרשמה לא מופעלת כרגע בשרת';
         case 'offline': return 'אין חיבור לאינטרנט — ההתקדמות נשמרת במכשיר ותסונכרן כשיש רשת';
         case 'timeout': return 'השרת לא הגיב — נסה שוב';
         case 'signed-out': return 'צריך להתחבר קודם';
         case 'disabled': return 'הסנכרון עדיין לא הופעל בגרסה הזו';
+        case '23514': return 'הערך נדחה על ידי השרת'; /* check-constraint violation */
         default: return 'משהו השתבש (' + code + ') — נסה שוב';
       }
     },
 
     /* exposed for tests */
-    _internals: { fv: fv, unfv: unfv, decodeDoc: decodeDoc, token: token }
+    _internals: { token: token, applyAuthPayload: applyAuthPayload }
   };
 
   var Backend = api;

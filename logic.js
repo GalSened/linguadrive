@@ -250,6 +250,33 @@
   }
   function turboGain(combo) { return 10 * Math.max(1, Math.min(combo, 5)); }
 
+  /* ---------- variety: shuffle-bag anti-repetition ----------
+     pickFresh returns the pool members NOT in the recent-window; when the window would starve
+     the request (fewer than n fresh items), the bag resets and the whole pool is fair again.
+     Pure — caller shuffles and caller persists the window via pushRecent. */
+  function pickFresh(pool, recent, n, keyOf) {
+    pool = Array.isArray(pool) ? pool : [];
+    keyOf = keyOf || function (x) { return x && x.en; };
+    var seen = {};
+    (Array.isArray(recent) ? recent : []).forEach(function (k) { seen[k] = 1; });
+    var fresh = pool.filter(function (it) { return !seen[keyOf(it)]; });
+    if (fresh.length < Math.min(n || 1, pool.length)) return pool.slice();
+    return fresh;
+  }
+  /* bounded MRU list: re-adding an existing key moves it to the back; oldest fall off the front */
+  function pushRecent(recent, keys, cap) {
+    recent = Array.isArray(recent) ? recent : [];
+    (Array.isArray(keys) ? keys : [keys]).forEach(function (k) {
+      if (k == null || k === '') return;
+      var i = recent.indexOf(k);
+      if (i >= 0) recent.splice(i, 1);
+      recent.push(k);
+    });
+    cap = Math.max(1, cap || 60);
+    while (recent.length > cap) recent.shift();
+    return recent;
+  }
+
   var Logic = {
     RANKS: RANKS,
     xpNeed: xpNeed,
@@ -258,6 +285,8 @@
     seededShuffle: seededShuffle,
     pickQuests: pickQuests,
     turboGain: turboGain,
+    pickFresh: pickFresh,
+    pushRecent: pushRecent,
     setLang: setLang,
     getLang: getLang,
     normalize: normalize,

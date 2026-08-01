@@ -16,6 +16,9 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: node tests/logic.test.cjs
       - run: node tests/content.test.cjs
+      - run: node tests/bank.selfcheck.cjs
+      - run: node tests/merge.test.cjs
+      - run: node tests/cloud.test.cjs
       - run: node tests/static.test.cjs
       - run: node tests/smoke.test.cjs
   deploy:

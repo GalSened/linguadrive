@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.0.0';
+var APP_VERSION = '2.1.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 var LANGS = {
@@ -57,12 +57,15 @@ var DEFAULTS = {
     carMode: 'repeat',      // repeat | translate
     carSource: 'smart',     // smart | lesson | clinic
     carStyle: 'drill',      // drill | listen
+    turboPool: 'learned',   // learned | all — how wide the Turbo word pool is
     dailyGoal: 15, onDevice: false
   },
   lessons: {}, srs: {}, log: {}, lastLesson: '',
   xp: 0, ach: {}, quests: null, boss: {}, best: {},
   vehicle: '🚗', daily: null, dailyStreak: 0, lastDaily: '', freeRoam: false, entry: { en: 0, es: 0 },
-  counters: { drills: 0, listens: 0, srs: 0, quizPerfects: 0, dialogues: 0, clinicHits: 0, minutes: 0, langs: {} }
+  counters: { drills: 0, listens: 0, srs: 0, quizPerfects: 0, dialogues: 0, clinicHits: 0, minutes: 0, langs: {} },
+  recent: { turbo: [], car: [], vocab: [] },   // anti-repetition MRU windows (per practice mode)
+  meta: { updatedAt: 0, settingsAt: 0 }        // cloud-sync LWW timestamps
 };
 var S = load();
 function load() {
@@ -81,10 +84,19 @@ function load() {
     s.boss = Object.assign({}, s.boss || {});
     s.ach = Object.assign({}, s.ach || {});
     s.entry = Object.assign({}, d.entry, s.entry || {});
+    s.meta = Object.assign({}, d.meta, s.meta || {});
+    var rec = Object.assign({}, d.recent, s.recent || {});
+    Object.keys(rec).forEach(function (k) { if (!Array.isArray(rec[k])) rec[k] = []; });
+    s.recent = rec;
     return Object.assign(d, s, { settings: s.settings });
   } catch (e) { return JSON.parse(JSON.stringify(DEFAULTS)); }
 }
-function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) { /* storage full/blocked */ } }
+function save() {
+  if (!S.meta) S.meta = { updatedAt: 0, settingsAt: 0 };
+  S.meta.updatedAt = Date.now(); S.meta.settingsAt = S.meta.updatedAt;
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) { /* storage full/blocked */ }
+  if (window.Sync) { try { Sync.schedule(); } catch (e) { } }
+}
 function lstate(id) { if (!S.lessons[id]) S.lessons[id] = { opened: 0, sent: {}, quizBest: -1, dlgDone: false, done: false, vocabAdded: false }; return S.lessons[id]; }
 function logActivity(items, minutes) {
   var k = todayKey();
@@ -113,11 +125,74 @@ function ensureCards(lesson) {
   if (added) save();
   return added;
 }
+function bankOf(code) {
+  code = code || S.settings.lang;
+  return code === 'es' ? (window.VOCAB_BANK_ES || null) : (window.VOCAB_BANK_EN || null);
+}
+function bankTopic(code, topicId) {
+  var bank = bankOf(code);
+  if (!bank || !Array.isArray(bank.topics)) return null;
+  for (var i = 0; i < bank.topics.length; i++) if (bank.topics[i].id === topicId) return bank.topics[i];
+  return null;
+}
 function cardWord(key) {
-  var p = key.split(':'); var l = lessonById(p[0]);
+  var p = key.split(':');
+  if (p[0] === 'bank') {           /* bank:{lang}:{topicId}:{index} */
+    if (p[1] !== S.settings.lang) return null;   /* other-language cards stay filtered, like lesson cards */
+    var topic = bankTopic(p[1], p[2]);
+    var bv = topic && topic.words && topic.words[+p[3]];
+    return bv ? { en: bv.en, he: bv.he, t: bv.t, ex: bv.ex, lesson: { icon: topic.icon, he: topic.he } } : null;
+  }
+  var l = lessonById(p[0]);
   if (!l) return null;
   var v = l.vocab[+p[1]];
   return v ? { en: v.en, he: v.he, t: v.t, ex: v.ex, lesson: l } : null;
+}
+/* The full word universe for the active language.
+   scope 'learned' = unlocked lessons + everything tracked in SRS;
+   scope 'all'     = every lesson + the whole topic bank (wide-variety mode). */
+function vocabPool(scope) {
+  var out = [], seen = {};
+  function push(en, he, key) {
+    var k = Logic.normalize(en);
+    if (!en || !he || seen[k]) return;
+    seen[k] = 1; out.push({ en: en, he: he, key: key });
+  }
+  CONTENT.lessons.forEach(function (l, i) {
+    if (scope === 'all' || lessonUnlocked(i)) l.vocab.forEach(function (v, vi) { push(v.en, v.he, l.id + ':' + vi); });
+  });
+  Object.keys(S.srs).forEach(function (key) {
+    var w = cardWord(key);
+    if (w) push(w.en, w.he, key);
+  });
+  var bank = bankOf();
+  if (bank && scope === 'all') {
+    bank.topics.forEach(function (t) {
+      (t.words || []).forEach(function (v, vi) { push(v.en, v.he, 'bank:' + S.settings.lang + ':' + t.id + ':' + vi); });
+    });
+  }
+  return out;
+}
+/* top a small pool up to `min` items with next lessons + first bank topics (fresh material
+   beats repeating the same 12 words — Gal's wide-variety requirement) */
+function topUpPool(pool, min) {
+  if (pool.length >= min) return pool;
+  var seen = {};
+  pool.forEach(function (it) { seen[Logic.normalize(it.en)] = 1; });
+  function push(en, he, key) {
+    if (pool.length >= min) return;
+    var k = Logic.normalize(en);
+    if (!en || !he || seen[k]) return;
+    seen[k] = 1; pool.push({ en: en, he: he, key: key });
+  }
+  CONTENT.lessons.forEach(function (l, i) {
+    l.vocab.forEach(function (v, vi) { push(v.en, v.he, l.id + ':' + vi); });
+  });
+  var bank = bankOf();
+  if (bank) bank.topics.forEach(function (t) {
+    (t.words || []).forEach(function (v, vi) { push(v.en, v.he, 'bank:' + S.settings.lang + ':' + t.id + ':' + vi); });
+  });
+  return pool;
 }
 function dueCards() {
   var now = Date.now(), out = [];
@@ -308,7 +383,7 @@ function render() {
   fn(parts[1]);
   $$('#bottomnav button').forEach(function (b) {
     var k = b.getAttribute('data-nav');
-    var on = (k === parts[0]) || (k === 'more' && ['more', 'progress', 'settings', 'clinic', 'about', 'garage', 'daily'].indexOf(parts[0]) >= 0) || (k === 'lessons' && (parts[0] === 'lesson' || parts[0] === 'boss'));
+    var on = (k === parts[0]) || (k === 'more' && ['more', 'progress', 'settings', 'clinic', 'about', 'garage', 'daily', 'boards'].indexOf(parts[0]) >= 0) || (k === 'lessons' && (parts[0] === 'lesson' || parts[0] === 'boss')) || (k === 'words' && parts[0] === 'srs');
     b.classList.toggle('active', on);
   });
   updateBadges();
@@ -1249,7 +1324,11 @@ Car.renderConfig = function () {
     '<div class="kicker" style="margin-top:.9rem">איך</div>' + chips(styleOpts, s.carStyle, 'cstyle');
   if (s.carStyle === 'drill' && TTS.he) html += '<div class="kicker" style="margin-top:.9rem">סגנון התרגול</div>' + chips(modeOpts, s.carMode, 'cmode');
   if (s.carStyle === 'drill' && !STT.supported) html += '<div class="small" style="color:var(--danger);margin-top:.8rem">אין זיהוי דיבור בדפדפן הזה — עוברים להאזנה בלבד</div>';
-  if (s.carStyle === 'turbo') html += '<div class="small muted" style="margin-top:.8rem">🏁 60 שניות: אני אומר בעברית — אתה עונה מהר ב' + activeLang().name + '. רצף תשובות = קומבו שמכפיל נקודות. השיא שלך: <b class="en" style="direction:ltr">' + (S.best['turbo_' + s.lang] || 0) + '</b></div>';
+  if (s.carStyle === 'turbo') {
+    html += '<div class="kicker" style="margin-top:.9rem">אילו מילים</div>' +
+      chips([['learned', '📗 מהשיעורים שלי'], ['all', '🌍 כל אוצר המילים']], s.turboPool === 'all' ? 'all' : 'learned', 'cpool') +
+      '<div class="small muted" style="margin-top:.8rem">🏁 60 שניות: אני אומר בעברית — אתה עונה מהר ב' + activeLang().name + '. רצף תשובות = קומבו שמכפיל נקודות. השיא שלך: <b class="en" style="direction:ltr">' + (S.best['turbo_' + s.lang] || 0) + '</b></div>';
+  }
   $('#carPrompt').innerHTML = html;
   $('#carState').textContent = 'העיניים על הכביש — האוזניים איתי. הכול קולי.';
   $('#carScore').textContent = '';
@@ -1259,6 +1338,7 @@ Car.renderConfig = function () {
   $$('#carPrompt [data-csrc]').forEach(function (b) { b.addEventListener('click', function () { S.settings.carSource = b.getAttribute('data-csrc'); save(); Car.renderConfig(); }); });
   $$('#carPrompt [data-cstyle]').forEach(function (b) { b.addEventListener('click', function () { S.settings.carStyle = b.getAttribute('data-cstyle'); save(); Car.renderConfig(); }); });
   $$('#carPrompt [data-cmode]').forEach(function (b) { b.addEventListener('click', function () { S.settings.carMode = b.getAttribute('data-cmode'); save(); Car.renderConfig(); }); });
+  $$('#carPrompt [data-cpool]').forEach(function (b) { b.addEventListener('click', function () { S.settings.turboPool = b.getAttribute('data-cpool'); save(); Car.renderConfig(); }); });
 };
 
 Car.buildItems = function () {
@@ -1271,12 +1351,20 @@ Car.buildItems = function () {
   } else if (src === 'lesson') {
     L.vocab.forEach(function (v, i) { out.push({ type: 'vocab', en: v.en, he: v.he, key: L.id + ':' + i }); });
     L.sentences.forEach(function (p) { out.push({ type: 'sent', en: p[0], he: p[1] }); });
-  } else { /* smart */
+  } else { /* smart: due reviews + sentences from ALL unlocked lessons, recency-filtered */
     var due = shuffle(dueCards()).slice(0, 8).map(function (k) { var w = cardWord(k); return { type: 'vocab', en: w.en, he: w.he, key: k }; });
-    var sents = shuffle(L.sentences.slice()).slice(0, 10).map(function (p) { return { type: 'sent', en: p[0], he: p[1] }; });
+    var sentPool = [];
+    CONTENT.lessons.forEach(function (l, li) {
+      if (lessonUnlocked(li)) l.sentences.forEach(function (p) { sentPool.push({ type: 'sent', en: p[0], he: p[1] }); });
+    });
+    var freshSents = Logic.pickFresh(sentPool, S.recent.car, 10, function (x) { return Logic.normalize(x.en); });
+    var sents = shuffle(freshSents).slice(0, 10);
     var a = due.slice(), b = sents.slice();
     while (a.length || b.length) { if (a.length) out.push(a.shift()); if (b.length) out.push(b.shift()); }
-    if (!out.length) L.vocab.slice(0, 8).forEach(function (v, i) { out.push({ type: 'vocab', en: v.en, he: v.he, key: L.id + ':' + i }); });
+    if (out.length < 8) {
+      var fill = shuffle(Logic.pickFresh(vocabPool('learned'), S.recent.car, 8, function (x) { return Logic.normalize(x.en); }));
+      fill.slice(0, 8 - out.length + 4).forEach(function (v) { out.push({ type: 'vocab', en: v.en, he: v.he, key: v.key }); });
+    }
   }
   return out;
 };
@@ -1431,6 +1519,10 @@ Car.runSession = async function () {
 };
 Car.finish = function () {
   Car.state = 'done';
+  /* remember what this session used, so the next one starts fresh */
+  Car.items.slice(0, Car.idx + 1).forEach(function (it) {
+    Logic.pushRecent(S.recent.car, Logic.normalize(it.en), 120);
+  });
   var min = Math.max(1, Math.round((Date.now() - Car.started) / 60000));
   logActivity(0, min); gameEvent('minutes', min); Car.started = 0;
   if (Car.clockT) { clearInterval(Car.clockT); Car.clockT = null; }
@@ -1469,21 +1561,15 @@ function bindCar() {
 var Turbo = {
   DUR: 60000, on: false, score: 0, combo: 0, cur: null, endAt: 0, items: [], idx: 0
 };
+/* Wide-variety pool: 'learned' = unlocked lessons + SRS, topped up to 30 with fresh material;
+   'all' = the entire word universe. A persisted MRU window keeps recently-sprinted words out
+   until the bag genuinely runs dry — no more "same 12 words every round". */
 Turbo.pool = function () {
-  var seen = {}, out = [];
-  function push(en, he) {
-    var k = Logic.normalize(en);
-    if (!en || !he || seen[k]) return;
-    seen[k] = 1; out.push({ en: en, he: he });
-  }
-  var L = lessonById(S.lastLesson) || nextLesson();
-  if (L) L.vocab.forEach(function (v) { push(v.en, v.he); });
-  Object.keys(S.srs).forEach(function (key) {
-    var w = cardWord(key);
-    if (w) push(w.en, w.he);
-  });
-  if (out.length < 8 && CONTENT.lessons[0]) CONTENT.lessons[0].vocab.forEach(function (v) { push(v.en, v.he); });
-  return shuffle(out);
+  var scope = S.settings.turboPool === 'all' ? 'all' : 'learned';
+  var pool = vocabPool(scope);
+  if (scope === 'learned') pool = topUpPool(pool, 30);
+  var fresh = Logic.pickFresh(pool, S.recent.turbo, Math.min(20, pool.length), function (x) { return Logic.normalize(x.en); });
+  return shuffle(fresh);
 };
 Turbo.comboLane = function () {
   var html = '';
@@ -1529,6 +1615,7 @@ Turbo.loop = async function () {
       if (Turbo.idx >= Turbo.items.length) { Turbo.items = shuffle(Turbo.items); Turbo.idx = 0; }
       var item = Turbo.items[Turbo.idx];
       Turbo.cur = item;
+      Logic.pushRecent(S.recent.turbo, Logic.normalize(item.en), 80);
       Turbo.show(item);
       Car.setState('🏁 קומבו ×' + Math.max(1, Math.min(Turbo.combo + 1, 5)));
       if (TTS.he) { try { await TTS.speak(item.he, { lang: 'he', rate: 1.05 }); } catch (e) { } }
@@ -1578,6 +1665,7 @@ Turbo.finish = function () {
   var prev = S.best[key] || 0;
   var record = Turbo.score > prev;
   if (record) { S.best[key] = Turbo.score; save(); confetti(); }
+  if (record && window.Account) { try { Account.onTurboRecord(S.best[key]); } catch (e) { } }
   var min = Math.max(1, Math.round((Date.now() - Car.started) / 60000));
   logActivity(0, min); gameEvent('minutes', min); Car.started = 0;
   gameEvent('turbo', Turbo.score);
@@ -1670,8 +1758,10 @@ ROUTES.daily = function () {
       '<div class="dgrid">' + S.daily.grid.join('') + '</div>' +
       '<p class="small muted" style="margin-top:.5rem">רצף אתגרים: ' + S.dailyStreak + ' ימים 🔥 · אתגר חדש מחר</p></div>' +
       '<div class="btnrow"><button class="btn big" id="dShare">📤 שתף תוצאה</button>' +
-      '<button class="btn big primary" data-cargo="turbo">🏁 בינתיים — טורבו</button></div>';
+      '<button class="btn big primary" data-cargo="turbo">🏁 בינתיים — טורבו</button></div>' +
+      '<div id="dailyBoard"></div>';
     $('#dShare').addEventListener('click', function () { shareText(dailyShareText()); });
+    if (window.Account) { try { Account.renderBoardInto($('#dailyBoard'), 'daily'); } catch (e) { } }
     Daily.run = null; Daily.cur = null;
     return;
   }
@@ -1696,6 +1786,7 @@ ROUTES.daily = function () {
     S.lastDaily = today;
     save();
     gameEvent('daily', score);
+    if (window.Account) { try { Account.onDailyDone(score); } catch (e) { } }
     if (score === 10) confetti();
     ROUTES.daily();
     return;
@@ -1758,7 +1849,9 @@ ROUTES.more = function () {
       var L = LANGS[k], has = !!L.pack();
       return '<button class="chip ' + (k === cur ? 'on' : '') + '" data-setlang="' + k + '" ' + (has ? '' : 'disabled') + ' style="flex:1;text-align:center;padding:.7rem">' + L.flag + ' ' + L.name + '</button>';
     }).join('') + '</div><div class="small muted" style="margin-top:.5rem">ההתקדמות נשמרת בנפרד לכל שפה. הרצף משותף.</div></div>';
+  if (window.Account) html += Account.moreRowHtml();
   [['garage', '🏎️', 'המוסך שלי', 'רכבים שנפתחים עם רמות והישגים'],
+   ['boards', '🏆', 'טבלת השיאים', 'האתגר היומי וטורבו 60 — מול כל השחקנים'],
    ['daily', '🗞️', 'האתגר היומי', '10 מילים, ניסיון אחד ביום'],
    ['progress', '📊', 'התקדמות', 'רצף, דקות, מילים שנקלטו'],
    ['clinic', '🗣️', 'קליניקת הגייה', 'הצלילים שדוברי עברית מפספסים'],
@@ -1769,8 +1862,9 @@ ROUTES.more = function () {
   var achN = Object.keys(S.ach).length;
   html += '<button class="lesson-item" id="achBtn"><span class="lic">🏆</span>' +
     '<span class="lt"><span class="he" style="display:block">הישגים</span><span class="small muted">' + achN + ' מתוך ' + ACH_DEFS.length + ' נפתחו</span></span><span class="muted">›</span></button>';
-  html += '<button class="lesson-item" id="aboutBtn"><span class="lic">ℹ️</span><span class="lt"><span class="he" style="display:block">על האפליקציה</span><span class="small muted">חינם. פרטי. בלי חשבון.</span></span><span class="muted">›</span></button>';
+  html += '<button class="lesson-item" id="aboutBtn"><span class="lic">ℹ️</span><span class="lt"><span class="he" style="display:block">על האפליקציה</span><span class="small muted">חינם. בלי פרסומות. חשבון — רק אם רוצים.</span></span><span class="muted">›</span></button>';
   $('#view').innerHTML = html;
+  if (window.Account) { try { Account.bindMoreRow(); } catch (e) { } }
   $$('#view [data-setlang]').forEach(function (b) {
     b.addEventListener('click', function () { setAppLang(b.getAttribute('data-setlang')); toast(activeLang().flag + ' עברנו ל' + activeLang().name); });
   });
@@ -1787,8 +1881,8 @@ ROUTES.more = function () {
   });
   $('#aboutBtn').addEventListener('click', function () {
     openSheet('<h2>🚗 LinguaDrive</h2>' +
-      '<p class="small">אפליקציה אישית ללימוד שפות בנסיעה. בנויה על יכולות הדיבור המובנות בדפדפן — בלי שרתים, בלי מפתחות, בלי עלות, בלי פרסומות.</p>' +
-      '<p class="small" style="margin-top:.6rem"><b>פרטיות:</b> כל ההתקדמות נשמרת במכשיר בלבד. זיהוי הדיבור מתבצע דרך שירות הדיבור של הדפדפן.</p>' +
+      '<p class="small">אפליקציה ללימוד שפות בנסיעה. בנויה על יכולות הדיבור המובנות בדפדפן — חינם, בלי פרסומות.</p>' +
+      '<p class="small" style="margin-top:.6rem"><b>פרטיות:</b> ההתקדמות נשמרת במכשיר. עם חשבון (אופציונלי) היא מסונכרנת גם לענן — כך אפשר לשחק מכמה מכשירים ולהופיע בטבלת השיאים. זיהוי הדיבור מתבצע דרך שירות הדיבור של הדפדפן.</p>' +
       '<p class="small" style="margin-top:.6rem"><b>בנסיעה:</b> האפליקציה בנויה לעבודה קולית מלאה. הפעל סשן לפני היציאה, הנח את הטלפון במעמד — והעיניים נשארות על הכביש.</p>' +
       '<p class="small muted" style="margin-top:.6rem">גרסה ' + APP_VERSION + ' · אנגלית + ספרדית · ' + (CONTENT_EN.lessons.length + CONTENT_ES.lessons.length) + ' שיעורים</p>' +
       '<button class="btn big primary" style="margin-top:1rem" onclick="closeSheet()">סגור</button>');
@@ -1885,7 +1979,7 @@ ROUTES.settings = function () {
     '<button class="btn" id="impBtn">⬆️ ייבוא</button>' +
     '<button class="btn danger" id="resetBtn">🗑️ איפוס</button></div>' +
     '<input type="file" id="impFile" accept="application/json" class="hide">' +
-    '<div class="small muted" style="margin-top:.5rem">הכול נשמר במכשיר בלבד. הגיבוי הוא קובץ JSON אחד.</div></div>';
+    '<div class="small muted" style="margin-top:.5rem">הנתונים נשמרים במכשיר (ועם חשבון — גם בענן). הגיבוי הוא קובץ JSON אחד.</div></div>';
   $('#view').innerHTML = html;
 
   $$('#view [data-acc]').forEach(function (b) {
@@ -1933,12 +2027,17 @@ ROUTES.settings = function () {
     r.readAsText(f);
   });
   $('#resetBtn').addEventListener('click', function () {
+    var signedIn = window.Backend && Backend.enabled && Backend.user();
     openSheet('<h2>לאפס את הכול?</h2><p class="small muted">כל ההתקדמות, החזרות וההגדרות יימחקו מהמכשיר. אין דרך חזרה (מומלץ לייצא גיבוי קודם).</p>' +
+      (signedIn ? '<p class="small" style="margin-top:.5rem">⚠️ אתה מחובר לחשבון — האיפוס גם ינתק אותך, אחרת ההתקדמות תחזור מהענן. העותק בענן לא נמחק.</p>' : '') +
       '<div class="btnrow" style="margin-top:1rem"><button class="btn big" onclick="closeSheet()">ביטול</button>' +
       '<button class="btn big danger" id="resetYes">כן, למחוק הכול</button></div>');
     $('#resetYes').addEventListener('click', function () {
-      try { localStorage.removeItem(STORE_KEY); } catch (e) { }
-      location.reload();
+      var done = function () {
+        try { localStorage.removeItem(STORE_KEY); } catch (e) { }
+        location.reload();
+      };
+      if (signedIn) Backend.logout().then(done, done); else done();
     });
   });
 };
@@ -1950,7 +2049,7 @@ function showOnboarding() {
   function draw() {
     openSheet(
       '<h2>🚗 ברוך הבא ל-LinguaDrive</h2>' +
-      '<p class="small muted">מורה פרטי לנסיעה: שיעורים בקול, תרגול הגייה עם ציון, וחזרות חכמות. חינם לגמרי, בלי חשבון — הכול נשאר אצלך במכשיר.</p>' +
+      '<p class="small muted">מורה פרטי לנסיעה: שיעורים בקול, תרגול הגייה עם ציון, וחזרות חכמות. חינם לגמרי. אפשר לשחק בלי חשבון, ואפשר להירשם כדי לשמור התקדמות בין מכשירים ולהתחרות בטבלת השיאים.</p>' +
       '<div class="kicker" style="margin-top:1rem">מה לומדים?</div><div class="chips">' +
       Object.keys(LANGS).map(function (k) { return '<button class="chip ' + (pickLang === k ? 'on' : '') + '" data-ob-lang="' + k + '" style="flex:1;text-align:center;padding:.65rem">' + LANGS[k].flag + ' ' + LANGS[k].name + '</button>'; }).join('') + '</div>' +
       '<div class="kicker" style="margin-top:1rem">מאיפה מתחילים?</div><div class="chips">' +
@@ -1986,6 +2085,22 @@ function boot() {
   TTS.init();
   setAppLang(S.settings.lang || 'en', false);
   bindCar();
+  if (window.Sync) {
+    try {
+      Sync.init({
+        getState: function () { return S; },
+        setState: function (ns) {   /* cloud merge landed: adopt, persist, refresh UI at a safe point */
+          S = ns; save();
+          try { setAppLang(S.settings.lang || 'en', false); } catch (e) { }
+          updateBadges();
+          if (!Car.active) render();
+        },
+        defaults: DEFAULTS,
+        appVersion: APP_VERSION,
+        isBusy: function () { return (Car.active && Car.state === 'run') || Turbo.on; }
+      });
+    } catch (e) { }
+  }
   render();
   if (!S.onboarded) showOnboarding();
   if ('serviceWorker' in navigator) {
@@ -2016,4 +2131,6 @@ function boot() {
     } else if (Car.active && !Car.wl) Car.requestWake();
   });
 }
-boot();
+/* account.js / vocab.js load after this file and register their routes before first render */
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+else boot();

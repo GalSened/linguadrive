@@ -284,6 +284,20 @@ h1,h2{font-family:var(--display);font-weight:400;letter-spacing:.01em}
 .setrow .sl .d{font-size:.8rem;color:var(--muted)}
 .setrow select,.setrow input[type=range]{max-width:46%}
 select{background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:.45rem .6rem}
+input[type=text],input[type=email],input[type=password],input[type=search]{
+  width:100%;background:var(--surface2);color:var(--ink);border:1px solid var(--line);
+  border-radius:12px;padding:.75rem .9rem;margin:.25rem 0;font-size:1rem}
+input[type=text]:focus,input[type=email]:focus,input[type=password]:focus,input[type=search]:focus{
+  outline:none;border-color:var(--lane)}
+.formerr{color:var(--danger);font-size:.85rem;min-height:1.2em;margin-top:.3rem}
+.lb-row{display:flex;align-items:center;gap:.7rem;padding:.55rem .2rem;border-bottom:1px dashed var(--line)}
+.lb-row:last-child{border-bottom:none}
+.lb-row .rank{font-family:var(--road);font-weight:800;width:2rem;text-align:center;direction:ltr;color:var(--muted)}
+.lb-row.me{background:var(--lane-soft);border-radius:10px;padding-inline:.5rem}
+.lb-row .score{font-family:var(--road);font-weight:800;direction:ltr;color:var(--lane)}
+.wordstatus{width:10px;height:10px;border-radius:50%;flex:none;background:var(--line)}
+.wordstatus.tracked{background:var(--lane)}
+.wordstatus.mastered{background:var(--ok)}
 input[type=range]{accent-color:var(--lane);width:140px}
 .switch{position:relative;width:52px;height:30px;flex:none}
 .switch input{opacity:0;width:0;height:0}
@@ -354,7 +368,7 @@ html[dir="ltr"] .switch input:checked + .sldr::before{transform:translateX(20px)
 <nav id="bottomnav">
   <button data-nav="home"><span class="ic">🏁</span>בית</button>
   <button data-nav="lessons"><span class="ic">📚</span>שיעורים</button>
-  <button data-nav="srs"><span class="navbadge hide" id="srsBadge">0</span><span class="ic">🃏</span>חזרות</button>
+  <button data-nav="words"><span class="navbadge hide" id="srsBadge">0</span><span class="ic">📖</span>מילים</button>
   <button data-nav="car"><span class="ic">🚗</span>נהיגה</button>
   <button data-nav="more"><span class="ic">⚙️</span>עוד</button>
 </nav>
@@ -384,8 +398,16 @@ html[dir="ltr"] .switch input:checked + .sldr::before{transform:translateX(20px)
 <div id="toast"><div class="t" id="toastT"></div></div>
 
 <script src="logic.js"></script>
+<script src="merge.js"></script>
 <script src="content.js"></script>
 <script src="content-es.js"></script>
+<script src="content-bank.js"></script>
+<script src="content-bank-es.js"></script>
+<script src="cloud-config.js"></script>
+<script src="backend.js"></script>
+<script src="sync.js"></script>
 <script src="app.js"></script>
+<script src="vocab.js"></script>
+<script src="account.js"></script>
 </body>
 </html>
