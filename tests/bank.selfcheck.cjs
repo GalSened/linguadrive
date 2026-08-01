@@ -1,14 +1,26 @@
-/* Self-check for content-bank.js / content-bank-es.js (temporary, will be replaced). */
+/* Self-check for content-bank.js / content-bank-es.js — bank structure, uniqueness,
+   and no overlap with the LESSON vocabulary (derived from the content packs at runtime). */
 'use strict';
 const path = require('path');
 const fs = require('fs');
+const vm = require('vm');
 
-const EXCL_PATH = 'C:\\Users\\gals\\AppData\\Local\\Temp\\claude\\C--Users-gals\\3a5543c6-efad-4d5b-bb33-d467f16bf2b3\\scratchpad\\existing-words.json';
 const EXPECTED_TOPICS = ['food','family','work','travel','shopping','health','home','weather','feelings','time','clothes','sport','tech','restaurant','help'];
 
 const EN = require(path.join(__dirname, '..', 'content-bank.js'));
 const ES = require(path.join(__dirname, '..', 'content-bank-es.js'));
-const excl = JSON.parse(fs.readFileSync(EXCL_PATH, 'utf8'));
+
+/* exclusion lists = every word already taught in the lessons */
+const ctx = { window: {} };
+vm.createContext(ctx);
+for (const f of ['content.js', 'content-es.js'])
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
+const packEn = ctx.window.CONTENT_EN || ctx.CONTENT_EN;
+const packEs = ctx.window.CONTENT_ES || ctx.CONTENT_ES;
+const excl = {
+  en: packEn.lessons.flatMap(l => l.vocab.map(v => v.en)),
+  es: packEs.lessons.flatMap(l => l.vocab.map(v => v.en))
+};
 
 let errors = 0;
 function fail(msg) { errors++; console.log('FAIL: ' + msg); }
