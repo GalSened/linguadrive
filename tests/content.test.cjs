@@ -1,5 +1,5 @@
 'use strict';
-const packs = { en: require('../content.js'), es: require('../content-es.js'), he: require('../content-he.js') };
+const packs = { en: require('../content.js'), es: require('../content-es.js'), he: require('../content-he.js'), fr: require('../content-fr.js') };
 let pass = 0, fail = 0;
 function ok(cond, name) { if (cond) pass++; else { fail++; console.log('  ✗ FAIL:', name); } }
 
@@ -55,6 +55,7 @@ for (const [code, C] of Object.entries(packs)) {
 ok(packs.en.lessons.every(l => l.id[0] === 'l'), 'EN ids start with l');
 ok(packs.es.lessons.every(l => l.id[0] === 's'), 'ES ids start with s');
 ok(packs.he.lessons.every(l => l.id[0] === 'h'), 'HE ids start with h');
+ok(packs.fr.lessons.every(l => l.id[0] === 'f'), 'FR ids start with f');
 // Hebrew-enrichment track: target fields must be HEBREW (high register), prompts Hebrew too
 ok(packs.he.lessons.every(l => l.vocab.every(v => /[א-ת]/.test(v.en) && /[א-ת]/.test(v.he))), 'HE vocab: both fields Hebrew');
 

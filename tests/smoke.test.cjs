@@ -55,7 +55,7 @@ async function until(fn, ms, name) {
   /* ---- load scripts in order (as real Scripts, not eval) ---- */
   const ctx = dom.getInternalVMContext();
   for (const f of ['logic.js', 'merge.js', 'content.js', 'content-es.js', 'content-bank.js', 'content-bank-es.js',
-                   'content-he.js', 'content-bank-he.js',
+                   'content-he.js', 'content-bank-he.js', 'content-fr.js', 'content-bank-fr.js',
                    'audio-manifest.js', 'cloud-config.js', 'backend.js', 'sync.js', 'app.js', 'voice.js', 'answers.js', 'vocab.js', 'account.js', 'league.js']) {
     vm.runInContext(fs.readFileSync(f, 'utf8'), ctx, { filename: f });
     /* smoke exercises the LOCAL-ONLY path deliberately (cloud path has its own suite: cloud.test) */

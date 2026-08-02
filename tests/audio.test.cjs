@@ -16,16 +16,16 @@ const ctx = { window: {} };
 vm.createContext(ctx);
 vm.runInContext(manSrc, ctx, { filename: 'audio-manifest.js' });
 const MAN = ctx.window.AUDIO_MANIFEST;
-ok(!!MAN && MAN.en && MAN.es && MAN.he, 'manifest defines en + es + he maps');
+ok(!!MAN && MAN.en && MAN.es && MAN.he && MAN.fr, 'manifest defines en + es + he + fr maps');
 
 /* the exact word universe the app can speak (mirrors tools/gen-audio.cjs collect) */
-for (const f of ['content.js', 'content-es.js', 'content-he.js'])
+for (const f of ['content.js', 'content-es.js', 'content-he.js', 'content-fr.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f });
-const packs = { en: ctx.window.CONTENT_EN || ctx.CONTENT_EN, es: ctx.window.CONTENT_ES || ctx.CONTENT_ES, he: ctx.window.CONTENT_HE || ctx.CONTENT_HE };
-const banks = { en: require('../content-bank.js'), es: require('../content-bank-es.js'), he: require('../content-bank-he.js') };
+const packs = { en: ctx.window.CONTENT_EN || ctx.CONTENT_EN, es: ctx.window.CONTENT_ES || ctx.CONTENT_ES, he: ctx.window.CONTENT_HE || ctx.CONTENT_HE, fr: ctx.window.CONTENT_FR || ctx.CONTENT_FR };
+const banks = { en: require('../content-bank.js'), es: require('../content-bank-es.js'), he: require('../content-bank-he.js'), fr: require('../content-bank-fr.js') };
 
 let checkedFiles = 0;
-for (const lang of ['en', 'es', 'he']) {
+for (const lang of ['en', 'es', 'he', 'fr']) {
   const wanted = new Set();
   packs[lang].lessons.forEach(l => l.vocab.forEach(v => wanted.add(Logic.normalize(v.en))));
   banks[lang].topics.forEach(t => (t.words || []).forEach(w => wanted.add(Logic.normalize(w.en))));
@@ -44,10 +44,10 @@ for (const lang of ['en', 'es', 'he']) {
     checkedFiles++;
   }
 }
-ok(checkedFiles >= 1450, 'checked ' + checkedFiles + ' audio files on disk (en+es+he)');
+ok(checkedFiles >= 1900, 'checked ' + checkedFiles + ' audio files on disk (en+es+he+fr)');
 
 /* spot-check real mp3 bytes (ID3 tag or MPEG frame sync), not empty/error payloads */
-['en', 'es', 'he'].forEach(lang => {
+['en', 'es', 'he', 'fr'].forEach(lang => {
   const file = Object.values(MAN[lang])[0];
   const buf = fs.readFileSync(path.join(ROOT, 'audio', lang, file));
   const isMp3 = (buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0);

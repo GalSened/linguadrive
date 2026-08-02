@@ -96,7 +96,8 @@ globalThis.fetch = function (url, opts) {
     const uid = liveTokens[auth];
     if (opts.method === 'POST') {
       if (!uid || body.uid !== uid) return jres(403, { code: '42501', message: 'RLS violation' });
-      if (!/^(daily-(en|es)-\d{4}-\d{2}-\d{2}|turbo-(en|es))$/.test(body.board)) return jres(400, { code: '23514', message: 'board_format' });
+      /* mirror of the LIVE Supabase CHECK — extended for he (v2.8.0), xp-all weekly (v2.7.0), fr (v2.10.0) */
+      if (!/^(daily-(en|es|he|fr)-\d{4}-\d{2}-\d{2}|turbo-(en|es|he|fr)|xp-all-\d{4}-W\d{2})$/.test(body.board)) return jres(400, { code: '23514', message: 'board_format' });
       if (body.board.startsWith('daily-') && body.s > 10) return jres(400, { code: '23514', message: 'daily_cap' });
       (db.scores[body.board] = db.scores[body.board] || {})[body.uid] = body;
       return jres(201, null);

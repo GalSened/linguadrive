@@ -26,6 +26,7 @@ const Logic = require(path.join(ROOT, 'logic.js'));
 const PLAN = {
   en: { voice: 'XrExE9yKIg1WjnnlVkGX', name: 'Matilda', model: 'eleven_flash_v2_5', language_code: 'en' },
   es: { voice: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah', model: 'eleven_flash_v2_5', language_code: 'es' },
+  fr: { voice: 'pFZP5JQG7iQjIQuC4Bku', name: 'Lily', model: 'eleven_flash_v2_5', language_code: 'fr' },
   he: { voice: 'nBwlhHY26CjUa3imYVjB', name: 'GalClone', model: 'eleven_multilingual_v2' }
 };
 const OUTPUT_FORMAT = 'mp3_44100_64'; /* single words — 64kbps is transparent enough */
@@ -42,7 +43,7 @@ function loadKey() {
 }
 
 /* ---- collect every word the app can ask to hear: lesson vocab + topic banks ---- */
-const LANGS = ['en', 'es', 'he'].filter(lc =>
+const LANGS = ['en', 'es', 'he', 'fr'].filter(lc =>
   fs.existsSync(path.join(ROOT, lc === 'en' ? 'content.js' : 'content-' + lc + '.js')));
 function collectWords() {
   const ctx = { window: {} };

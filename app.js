@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.9.0';
+var APP_VERSION = '2.10.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
