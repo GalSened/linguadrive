@@ -1,7 +1,7 @@
 /* English Drive — app engine. Free forever: Web Speech API only, no servers, no keys. */
 'use strict';
 
-var APP_VERSION = '2.8.0';
+var APP_VERSION = '2.9.0';
 /* Active language pack (set by setAppLang) */
 var CONTENT = null;
 /* Adding a language (e.g. French) = add an entry here + content-fr.js / content-bank-fr.js
@@ -13,6 +13,9 @@ var LANGS = {
   es: { code: 'es', name: 'ספרדית', flag: '🇪🇸', plate: 'ES·DRIVE', tagline: 'המורה שלך לספרדית',
         accents: [['es-ES', 'ספרד 🇪🇸'], ['es-MX', 'לטיני 🇲🇽']], defAccent: 'es-ES',
         pack: function () { return (typeof CONTENT_ES !== 'undefined') ? CONTENT_ES : null; } },
+  fr: { code: 'fr', name: 'צרפתית', flag: '🇫🇷', plate: 'FR·DRIVE', tagline: 'המורה שלך לצרפתית',
+        accents: [['fr-FR', 'צרפת 🇫🇷'], ['fr-CA', 'קנדי 🇨🇦']], defAccent: 'fr-FR',
+        pack: function () { return (typeof CONTENT_FR !== 'undefined') ? CONTENT_FR : null; } },
   he: { code: 'he', name: 'עברית גבוהה', flag: '🇮🇱', plate: 'HE·DRIVE', tagline: 'המורה שלך לעברית גבוהה',
         accents: [['he-IL', 'עברית 🇮🇱']], defAccent: 'he-IL',
         pack: function () { return (typeof CONTENT_HE !== 'undefined') ? CONTENT_HE : null; } }
@@ -79,8 +82,8 @@ var DEFAULTS = {
   settings: {
     lang: 'en',
     rate: 0.95,
-    accents: { en: 'en-US', es: 'es-ES', he: 'he-IL' },
-    voiceURIs: { en: '', es: '', he: '' },
+    accents: { en: 'en-US', es: 'es-ES', fr: 'fr-FR', he: 'he-IL' },
+    voiceURIs: { en: '', es: '', fr: '', he: '' },
     pauseMs: 1500, repeats: 1, sound: true,
     carMode: 'repeat',      // repeat | translate
     carSource: 'smart',     // smart | lesson | clinic
@@ -93,7 +96,7 @@ var DEFAULTS = {
   },
   lessons: {}, srs: {}, log: {}, lastLesson: '',
   xp: 0, ach: {}, quests: null, boss: {}, best: {},
-  vehicle: '🚗', daily: null, dailyStreak: 0, lastDaily: '', freeRoam: false, entry: { en: 0, es: 0, he: 0 },
+  vehicle: '🚗', daily: null, dailyStreak: 0, lastDaily: '', freeRoam: false, entry: { en: 0, es: 0, fr: 0, he: 0 },
   counters: { drills: 0, listens: 0, srs: 0, quizPerfects: 0, dialogues: 0, clinicHits: 0, minutes: 0, hardHits: 0, langs: {} },
   recent: { turbo: [], car: [], vocab: [] },   // anti-repetition MRU windows (per practice mode)
   weak: {},                                    // '{lang}:{norm-en}' → {n misses, s hit-streak, t ts}
@@ -172,6 +175,7 @@ function ensureCards(lesson) {
 function bankOf(code) {
   code = code || S.settings.lang;
   if (code === 'es') return window.VOCAB_BANK_ES || null;
+  if (code === 'fr') return window.VOCAB_BANK_FR || null;
   if (code === 'he') return window.VOCAB_BANK_HE || null;
   return window.VOCAB_BANK_EN || null;
 }
@@ -415,6 +419,25 @@ var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 var STT = {
   supported: !!SR,
   rec: null, busy: false,
+  /* Join multi-segment recognition into whole-utterance alternatives.
+     Mobile Chrome delivers one spoken sentence as SEVERAL final segments; the old code read
+     only results[0] and threw the rest away — "אמרתי משפט והוא שמע מילה אחרת" (Gal, 2026-08-02).
+     alternative k = segment_i.alts[k] (falling back to that segment's best), plus any
+     not-yet-final interim tail, so nothing heard is ever discarded. */
+  _join: function (finals, interim) {
+    finals = finals || [];
+    var tail = String(interim || '').replace(/\s+/g, ' ').trim();
+    var width = 1, out = [];
+    finals.forEach(function (seg) { if (seg.length > width) width = seg.length; });
+    for (var k = 0; k < width; k++) {
+      var parts = [];
+      finals.forEach(function (seg) { parts.push(seg[k] != null ? seg[k] : seg[0]); });
+      if (tail) parts.push(tail);
+      var joined = parts.join(' ').replace(/\s+/g, ' ').trim();
+      if (joined && out.indexOf(joined) < 0) out.push(joined);
+    }
+    return { alts: out, transcript: out[0] || '' };
+  },
   listen: function (opt) {
     opt = opt || {};
     return new Promise(function (resolve) {
@@ -424,23 +447,52 @@ var STT = {
       try { rec = new SR(); } catch (e) { return resolve({ ok: false, error: 'init', alts: [] }); }
       STT.rec = rec; STT.busy = true;
       rec.lang = opt.lang || accentOf(S.settings.lang);
-      rec.continuous = false;
-      rec.interimResults = false;
+      rec.continuous = true;       // collect every segment — see _join
+      rec.interimResults = true;   // live feedback + salvage on timeout
       rec.maxAlternatives = 5;
       if (S.settings.onDevice && 'processLocally' in rec) { try { rec.processLocally = true; } catch (e) { } }
-      var settled = false, timer = null;
-      var finish = function (res) {
+      var settled = false, stopping = false, timer = null;
+      var finals = [], interim = '';
+      var t0 = Date.now();
+      var IDLE = opt.idle || 2600;              // stop this long after speech pauses
+      var CAP = opt.cap || 16000;               // absolute ceiling per attempt
+      function snap() { return STT._join(finals, interim); }
+      function finish(res) {
         if (settled) return; settled = true;
         clearTimeout(timer); STT.busy = false; STT.rec = null;
+        try { rec.abort(); } catch (e) { }
         resolve(res);
-      };
+      }
+      function deliver(errCode) {
+        var s = snap();
+        if (s.alts.length) finish({ ok: true, alts: s.alts, transcript: s.transcript });
+        else finish({ ok: false, error: errCode || 'no-speech', alts: [] });
+      }
+      function beginStop() {
+        if (stopping) return; stopping = true;
+        try { rec.stop(); } catch (e) { }
+        clearTimeout(timer);
+        timer = setTimeout(function () { deliver(); }, 1500); // backstop if onend never fires
+      }
+      function arm(ms) {
+        clearTimeout(timer);
+        timer = setTimeout(beginStop, Math.max(250, Math.min(ms, CAP - (Date.now() - t0))));
+      }
       rec.onresult = function (ev) {
-        var alts = [];
+        var f = [], inter = '';
         try {
-          var r = ev.results[0];
-          for (var i = 0; i < r.length; i++) alts.push(r[i].transcript);
+          for (var i = 0; i < ev.results.length; i++) {
+            var r = ev.results[i];
+            if (r.isFinal) {
+              var alts = [];
+              for (var k = 0; k < r.length; k++) { var tr = r[k] && r[k].transcript; if (tr) alts.push(tr); }
+              if (alts.length) f.push(alts);
+            } else inter += ' ' + ((r[0] && r[0].transcript) || '');
+          }
         } catch (e) { }
-        finish({ ok: alts.length > 0, alts: alts, transcript: alts[0] || '' });
+        finals = f; interim = inter;
+        if (opt.onPartial) { try { opt.onPartial(snap().transcript); } catch (e) { } }
+        if (!stopping) arm(IDLE);   // speech is flowing — reset the silence clock
       };
       rec.onerror = function (ev) {
         var code = ev && ev.error || 'error';
@@ -449,10 +501,12 @@ var STT = {
           finish({ ok: false, error: 'ondevice-fallback', alts: [] });
           return;
         }
-        finish({ ok: false, error: code, alts: [] });
+        if (code === 'aborted' || code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
+          finish({ ok: false, error: code, alts: [] });
+        } else deliver(code);       // salvage whatever was already heard
       };
-      rec.onend = function () { finish({ ok: false, error: 'no-speech', alts: [] }); };
-      timer = setTimeout(function () { try { rec.stop(); } catch (e) { } }, opt.timeout || 7000);
+      rec.onend = function () { deliver(); };
+      arm(opt.timeout || 8000);     // window to START talking; resets on every result
       try { rec.start(); } catch (e) { finish({ ok: false, error: 'start-failed', alts: [] }); }
     });
   },
@@ -469,6 +523,7 @@ function sttErrorHe(code) {
     case 'audio-capture': return 'לא נמצא מיקרופון במכשיר';
     case 'unsupported': return 'הדפדפן הזה לא תומך בזיהוי דיבור — נסה כרום או ספארי';
     case 'ondevice-fallback': return 'זיהוי במכשיר לא זמין — חזרתי לזיהוי רגיל, נסה שוב';
+    case 'aborted': return 'ההקלטה בוטלה';
     default: return 'משהו השתבש בהקלטה — נסה שוב';
   }
 }
@@ -1178,7 +1233,7 @@ function renderSpeak(l, box) {
     await TTS.stop();
     mic.classList.add('listening'); $('#micHint').textContent = 'מקשיב... דבר עכשיו';
     Beep.go();
-    var res = await STT.listen({ timeout: 8000 });
+    var res = await STT.listen({ timeout: 8000, onPartial: function (pt) { var h = $('#micHint'); if (h && pt) h.textContent = '🎧 ' + pt; } });
     mic.classList.remove('listening');
     if (!res.ok) { $('#micHint').textContent = sttErrorHe(res.error); Beep.bad(); return; }
     $('#micHint').textContent = 'הקשב, ואז לחץ ואמור את המשפט';
@@ -1329,7 +1384,7 @@ function renderTalk(l, box) {
     TTS.stop();
     mic.classList.add('listening'); $('#tHint').textContent = 'מקשיב...';
     Beep.go();
-    var res = await STT.listen({ timeout: 9000 });
+    var res = await STT.listen({ timeout: 9000, onPartial: function (pt) { var h = $('#tHint'); if (h && pt) h.textContent = '🎧 ' + pt; } });
     mic.classList.remove('listening');
     if (!res.ok) { $('#tHint').textContent = sttErrorHe(res.error); return; }
     var r = Logic.bestScore(t.en, res.alts);
@@ -1421,12 +1476,13 @@ ROUTES.srs = function () {
     var m = $('#srsMic');
     if (m) m.addEventListener('click', async function () {
       TTS.stop(); m.classList.add('listening'); Beep.go();
-      var res = await STT.listen({ timeout: 6000 });
+      var res = await STT.listen({ timeout: 8000, onPartial: function (pt) { var sb = $('#srsScore'); if (sb && pt) sb.innerHTML = '<span class="small muted">🎧 ' + esc(pt) + '</span>'; } });
       m.classList.remove('listening');
       if (!res.ok) { $('#srsScore').innerHTML = '<span class="small muted">' + sttErrorHe(res.error) + '</span>'; return; }
       var r = Logic.bestScore(w.en, res.alts);
       var ok = r.score >= difficulty().srsPass;
-      $('#srsScore').innerHTML = '<div class="scorenum ' + Logic.grade(r.score) + '">' + r.score + '%</div>';
+      $('#srsScore').innerHTML = '<div class="scorenum ' + Logic.grade(r.score) + '">' + r.score + '%</div>' +
+        (ok ? '' : '<div class="heardline">שמעתי: "' + esc(r.heard) + '"</div>');
       await sleep(800);
       gradeCard(ok);
     });
@@ -1497,7 +1553,7 @@ function drillSentence(c, i) {
   if (mic && STT.supported) mic.addEventListener('click', async function () {
     TTS.stop(); mic.classList.add('listening'); Beep.go();
     $('#dHint').textContent = 'מקשיב...';
-    var res = await STT.listen({ timeout: 8000 });
+    var res = await STT.listen({ timeout: 8000, onPartial: function (pt) { var h = $('#dHint'); if (h && pt) h.textContent = '🎧 ' + pt; } });
     mic.classList.remove('listening');
     $('#dHint').textContent = 'אמור את המשפט';
     if (!res.ok) { $('#dHint').textContent = sttErrorHe(res.error); return; }
@@ -1951,7 +2007,9 @@ Turbo.loop = async function () {
         if (ta.cmd === 'skip') { Turbo.combo = 0; Turbo.comboLane(); Turbo.idx++; continue; }
         if (ta.typed) { var tm = Logic.typedMatch(item.en, ta.typed, undefined, diff.typedExact); r = { ok: tm.ok, score: tm.score }; }
       } else {
-        var res = await STT.listen({ timeout: Math.max(1500, Math.min(diff.turboVoiceMs, Turbo.endAt - Date.now())) });
+        /* turbo: the window IS the game clock — cap the whole attempt, don't stretch it */
+        var tw = Math.max(1500, Math.min(diff.turboVoiceMs, Turbo.endAt - Date.now()));
+        var res = await STT.listen({ timeout: tw, cap: tw + 2000, idle: 1400 });
         if (!Car.active || Car.gen !== g) return;
         var cmd = matchCmd(res.alts);
         if (cmd === 'stop') { Car.pauseToggle(); continue; }
@@ -2366,13 +2424,15 @@ ROUTES.settings = function () {
   var od = $('#setOnDevice');
   if (od) od.addEventListener('change', function () { S.settings.onDevice = this.checked; save(); });
   $('#testTTS').addEventListener('click', function () {
-    var sample = lc === 'es' ? '¡Hola! ¿Listo para aprender español?' : 'Hello! Ready to drive and learn?';
+    var sample = lc === 'es' ? '¡Hola! ¿Listo para aprender español?' :
+      lc === 'fr' ? 'Bonjour ! Prêt à apprendre le français ?' :
+      lc === 'he' ? 'שלום! מוכנים להעשיר את הלשון?' : 'Hello! Ready to drive and learn?';
     TTS.pick(); TTS.speak(sample);
   });
   var tm = $('#testMic');
   if (tm) tm.addEventListener('click', async function () {
     tm.classList.add('listening'); $('#micTestOut').textContent = 'מקשיב...'; Beep.go();
-    var res = await STT.listen({ timeout: 6000 });
+    var res = await STT.listen({ timeout: 8000, onPartial: function (pt) { var o = $('#micTestOut'); if (o && pt) o.textContent = '🎧 ' + pt; } });
     tm.classList.remove('listening');
     $('#micTestOut').textContent = res.ok ? 'שמעתי: "' + res.transcript + '" ✓' : sttErrorHe(res.error);
   });
@@ -2417,14 +2477,14 @@ ROUTES.settings = function () {
 
 /* ================= Onboarding ================= */
 function showOnboarding() {
-  var startId = { en: 'l1', es: 's1', he: 'h1' };
+  var startId = { en: 'l1', es: 's1', fr: 'f1', he: 'h1' };
   var pickLang = 'en', pickLevel = 'new';
   function draw() {
     openSheet(
       '<h2>🚗 ברוך הבא ל-LinguaDrive</h2>' +
-      '<p class="small muted">המורה הפרטי שלך לאנגלית ולספרדית: שיעורים בקול, תרגול הגייה עם ציון, ספריית מילים וחזרות חכמות — ויש גם מצב נהיגה למי שרוצה לתרגל בדרך. חינם לגמרי. אפשר לשחק בלי חשבון, ואפשר להירשם כדי לשמור התקדמות בין מכשירים ולהתחרות בטבלת השיאים.</p>' +
+      '<p class="small muted">המורה הפרטי שלך לשפות — אנגלית, ספרדית, צרפתית ועברית גבוהה: שיעורים בקול, תרגול הגייה עם ציון, ספריית מילים וחזרות חכמות — ויש גם מצב נהיגה למי שרוצה לתרגל בדרך. חינם לגמרי. אפשר לשחק בלי חשבון, ואפשר להירשם כדי לשמור התקדמות בין מכשירים ולהתחרות בטבלת השיאים.</p>' +
       '<div class="kicker" style="margin-top:1rem">מה לומדים?</div><div class="chips">' +
-      Object.keys(LANGS).map(function (k) { return '<button class="chip ' + (pickLang === k ? 'on' : '') + '" data-ob-lang="' + k + '" style="flex:1;text-align:center;padding:.65rem">' + LANGS[k].flag + ' ' + LANGS[k].name + '</button>'; }).join('') + '</div>' +
+      Object.keys(LANGS).filter(function (k) { return !!LANGS[k].pack(); }).map(function (k) { return '<button class="chip ' + (pickLang === k ? 'on' : '') + '" data-ob-lang="' + k + '" style="flex:1;text-align:center;padding:.65rem">' + LANGS[k].flag + ' ' + LANGS[k].name + '</button>'; }).join('') + '</div>' +
       '<div class="kicker" style="margin-top:1rem">מאיפה מתחילים?</div><div class="chips">' +
       [['new', '🌱 מאפס'], ['some', '🌿 יש לי בסיס'], ['mid', '🌳 בינוני']].map(function (o) { return '<button class="chip ' + (pickLevel === o[0] ? 'on' : '') + '" data-ob-lvl="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '</div>' +
       '<div class="btnrow" style="margin-top:1.2rem"><button class="btn" id="obSound">🔊 בדיקת שמע</button>' +
@@ -2435,12 +2495,13 @@ function showOnboarding() {
       audioCtx();
       S.settings.lang = pickLang; TTS.pick();
       TTS.speak(pickLang === 'es' ? '¡Hola! Vamos a aprender español.' :
+        pickLang === 'fr' ? 'Bonjour ! Apprenons le français ensemble.' :
         pickLang === 'he' ? 'שלום! הבה נעשיר את לשוננו.' : 'Hello! Let\'s learn English together.',
         pickLang === 'he' ? { lang: 'he' } : {});
     });
     $('#obGo').addEventListener('click', function () {
       audioCtx();
-      var lvlMap = { en: { new: 'l1', some: 'l4', mid: 'l9' }, es: { new: 's1', some: 's4', mid: 's9' }, he: { new: 'h1', some: 'h4', mid: 'h9' } };
+      var lvlMap = { en: { new: 'l1', some: 'l4', mid: 'l9' }, es: { new: 's1', some: 's4', mid: 's9' }, fr: { new: 'f1', some: 'f4', mid: 'f9' }, he: { new: 'h1', some: 'h4', mid: 'h9' } };
       S.onboarded = true;
       S.lastLesson = (lvlMap[pickLang] || lvlMap.en)[pickLevel] || startId[pickLang];
       var entryIdx = { new: 0, some: 3, mid: 8 }[pickLevel] || 0;

@@ -37,7 +37,9 @@ async function until(fn, ms, name) {
       setTimeout(() => {
         if (sttReply == null) { this.onend && this.onend(); return; }
         const alt = { transcript: sttReply };
-        this.onresult && this.onresult({ results: [{ 0: alt, length: 1 }] });
+        /* real Chrome shape: final result segment, then end */
+        this.onresult && this.onresult({ results: [{ 0: alt, length: 1, isFinal: true }] });
+        this.onend && this.onend();
       }, 5);
     };
     this.stop = () => { this.onend && this.onend(); };
@@ -70,6 +72,19 @@ async function until(fn, ms, name) {
   await until(() => $('#overlay').classList.contains('hide'), 1000, 'onboarding closes');
   ok(w.S.onboarded === true, 'onboarded persisted');
   ok(w.CONTENT === w.CONTENT_EN, 'default pack = EN');
+
+  /* 1b. v2.9.0 STT capture: multi-segment joining (mobile Chrome splits a sentence
+     into several final segments — the old code kept only the first) */
+  {
+    const j = w.STT._join([['שלום', 'שלום לך'], ['עולם']], '');
+    ok(j.transcript === 'שלום עולם', 'join concatenates final segments (got "' + j.transcript + '")');
+    ok(j.alts.includes('שלום לך עולם'), 'join builds cross-segment alternatives');
+    const j2 = w.STT._join([['hello']], ' world ');
+    ok(j2.transcript === 'hello world', 'interim tail appended to finals');
+    const j3 = w.STT._join([], '  בוקר  טוב ');
+    ok(j3.transcript === 'בוקר טוב' && j3.alts.length === 1, 'interim-only speech is salvaged, not discarded');
+    ok(w.STT._join([], '').alts.length === 0, 'nothing heard → no alternatives');
+  }
 
   /* 2. home renders */
   await until(() => $('#view .signcard'), 1000, 'home signcard');

@@ -85,7 +85,7 @@
       TTS.stop(); mic.classList.add('listening'); Beep.go();
       var hint = $('#' + p + 'Hint');
       if (hint) hint.textContent = 'מקשיב…';
-      var res = await STT.listen({ timeout: 6000 });
+      var res = await STT.listen({ timeout: 8000, onPartial: function (pt) { if (hint && pt) hint.textContent = '🎧 ' + pt; } });
       mic.classList.remove('listening');
       if (hint) hint.textContent = 'הקש ואמור ב' + activeLang().name;
       if (done) return;

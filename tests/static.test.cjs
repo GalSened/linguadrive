@@ -43,8 +43,25 @@ const man = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
 man.icons.forEach(i => ok(fs.existsSync(i.src), 'manifest icon exists: ' + i.src));
 
 // version discipline: bump both together
-ok(app.includes("var APP_VERSION = '2.8.0'"), 'app version 2.8.0');
-ok(sw.includes('linguadrive-v2.8.0'), 'sw cache version bumped in lockstep');
+ok(app.includes("var APP_VERSION = '2.9.0'"), 'app version 2.9.0');
+ok(sw.includes('linguadrive-v2.9.0'), 'sw cache version bumped in lockstep');
+
+// v2.9.0: voice-capture overhaul (Gal live report 2026-08-02: sentences truncated to one word,
+// Hebrew scored with Latin rules)
+ok(app.includes('rec.continuous = true'), 'STT collects every speech segment');
+ok(app.includes('rec.interimResults = true'), 'STT keeps interim text for feedback + salvage');
+ok(app.includes('_join: function'), 'multi-segment joiner exists (STT._join)');
+ok((app.match(/onPartial/g) || []).length >= 6, 'live partial feedback wired at the mic surfaces');
+ok(fs.readFileSync('answers.js', 'utf8').includes('onPartial'), 'shared answer component shows live partials');
+ok(app.includes("case 'aborted'"), 'aborted recognition has a Hebrew message');
+const logicSrc = fs.readFileSync('logic.js', 'utf8');
+ok(logicSrc.includes('hebDeprefix'), 'Hebrew connective-prefix tolerance in matching');
+ok(logicSrc.includes('ׇ') || /05C7|֑-ׇ/.test(logicSrc), 'niqqud stripping present');
+ok(logicSrc.includes("code === 'he'"), 'setLang keeps he as its own matching language');
+// latent French engine wiring (pack files ship separately; UI hides packless langs)
+ok(app.includes("fr: { code: 'fr'"), 'LANGS.fr registered');
+ok(app.includes('VOCAB_BANK_FR'), 'bankOf resolves the French bank');
+ok(app.includes('.filter(function (k) { return !!LANGS[k].pack(); })'), 'onboarding hides languages without a pack');
 
 // v2.7.1: competitiveness — tickets, ghost race, chase framing, challenge shares
 ok(app.includes('Turbo.TICKETS'), 'turbo ticket cap defined');
@@ -63,7 +80,7 @@ ok(fs.readFileSync('merge.js', 'utf8').includes('turboCurve'), 'merge carries gh
 // v2.8.0: Hebrew-enrichment track (עברית גבוהה)
 ok(app.includes("he: { code: 'he'"), 'LANGS.he registered');
 ok(app.includes('VOCAB_BANK_HE'), 'bankOf resolves the Hebrew bank');
-ok(app.includes("startId = { en: 'l1', es: 's1', he: 'h1' }"), 'onboarding start ids include he');
+ok(app.includes("startId = { en: 'l1', es: 's1', fr: 'f1', he: 'h1' }"), 'onboarding start ids include fr + he');
 ok(app.includes("classList.toggle('lang-he'"), 'RTL flip class applied on lang switch');
 ok(html.includes('body.lang-he .en'), 'lang-he typography override present');
 ok(html.includes('content-he.js') && html.includes('content-bank-he.js'), 'Hebrew packs loaded');

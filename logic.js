@@ -37,11 +37,27 @@
       '16': 'dieciseis', '17': 'diecisiete', '18': 'dieciocho', '19': 'diecinueve', '20': 'veinte',
       '30': 'treinta', '40': 'cuarenta', '50': 'cincuenta', '60': 'sesenta', '70': 'setenta',
       '80': 'ochenta', '90': 'noventa', '100': 'cien', '1000': 'mil'
+    },
+    fr: {
+      '0': 'zéro', '1': 'un', '2': 'deux', '3': 'trois', '4': 'quatre', '5': 'cinq',
+      '6': 'six', '7': 'sept', '8': 'huit', '9': 'neuf', '10': 'dix',
+      '11': 'onze', '12': 'douze', '13': 'treize', '14': 'quatorze', '15': 'quinze',
+      '16': 'seize', '17': 'dix sept', '18': 'dix huit', '19': 'dix neuf', '20': 'vingt',
+      '30': 'trente', '40': 'quarante', '50': 'cinquante', '60': 'soixante', '70': 'soixante dix',
+      '80': 'quatre vingts', '90': 'quatre vingt dix', '100': 'cent', '1000': 'mille'
+    },
+    he: {
+      '0': 'אפס', '1': 'אחת', '2': 'שתיים', '3': 'שלוש', '4': 'ארבע', '5': 'חמש',
+      '6': 'שש', '7': 'שבע', '8': 'שמונה', '9': 'תשע', '10': 'עשר',
+      '11': 'אחת עשרה', '12': 'שתים עשרה', '13': 'שלוש עשרה', '14': 'ארבע עשרה', '15': 'חמש עשרה',
+      '16': 'שש עשרה', '17': 'שבע עשרה', '18': 'שמונה עשרה', '19': 'תשע עשרה', '20': 'עשרים',
+      '30': 'שלושים', '40': 'ארבעים', '50': 'חמישים', '60': 'שישים', '70': 'שבעים',
+      '80': 'שמונים', '90': 'תשעים', '100': 'מאה', '1000': 'אלף'
     }
   };
 
   var currentLang = 'en';
-  function setLang(code) { currentLang = (code === 'es') ? 'es' : 'en'; }
+  function setLang(code) { currentLang = (code === 'es' || code === 'fr' || code === 'he') ? code : 'en'; }
   function getLang() { return currentLang; }
 
   function stripDiacritics(t) {
@@ -52,7 +68,11 @@
   function normalize(text, lang) {
     lang = lang || currentLang;
     var t = String(text || '').toLowerCase();
-    t = t.replace(/[\u2018\u2019\u02BC]/g, "'");        // curly apostrophes
+    t = t.replace(/[\u2018\u2019\u02BC\u05F3]/g, "'");  // curly apostrophes + Hebrew geresh (\u05D2\u05F3 == \u05D2')
+    t = t.replace(/\u05F4/g, '"');                      // Hebrew gershayim \u2192 quote (stripped below)
+    t = t.replace(/[\u05BE\u05C0\u05C3]/g, ' ');                  // maqaf/paseq/sof-pasuq are separators, not diacritics
+    t = t.replace(/[\u0591-\u05C7]/g, '');              // Hebrew niqqud + cantillation (ASR/typed never carry them consistently)
+    t = t.replace(/[\u05DA\u05DD\u05DF\u05E3\u05E5]/g, function (c) { return { '\u05DA': '\u05DB', '\u05DD': '\u05DE', '\u05DF': '\u05E0', '\u05E3': '\u05E4', '\u05E5': '\u05E6' }[c]; }); // fold final letters
     t = t.replace(/[.,!?;:"\u201C\u201D()\[\]\u2014\u2013\u00BF\u00A1\u00AB\u00BB-]/g, ' '); // incl. Spanish inverted marks
     t = ' ' + t + ' ';
     if (lang === 'en') {
@@ -63,7 +83,10 @@
     var nums = NUM_WORDS[lang] || NUM_WORDS.en;
     t = t.replace(/(\d+)/g, function (m) { return nums[m] ? ' ' + nums[m] + ' ' : ' ' + m + ' '; });
     t = t.replace(/'/g, '');
-    if (lang === 'es') t = stripDiacritics(t); // lenient: años == anos for scoring purposes
+    if (lang === 'es' || lang === 'fr') {
+      t = stripDiacritics(t); // lenient: años == anos, année == annee for scoring purposes
+      t = t.replace(/œ/g, 'oe').replace(/æ/g, 'ae'); // ligatures: sœur == soeur (NFD does not decompose them)
+    }
     t = t.replace(/\s+/g, ' ').trim();
     return t;
   }
@@ -97,8 +120,23 @@
     return 1 - editDistance(a, b) / maxLen;
   }
 
+  var HEB_LETTER = /[א-ת]/;
+  /* Hebrew ASR merges the ו/ה connectives into the next word ("ואולם" for "אולם") —
+     strip ONE leading connective when the word is long enough to survive it */
+  function hebDeprefix(w) {
+    return (w.length >= 4 && (w.charAt(0) === 'ו' || w.charAt(0) === 'ה')) ? w.slice(1) : w;
+  }
   function wordsMatch(a, b) {
     if (a === b) return true;
+    if (HEB_LETTER.test(a) || HEB_LETTER.test(b)) {
+      /* Hebrew words are consonant-dense and SHORT in letters — Latin length thresholds
+         made the he track the strictest of all (Gal live report 2026-08-02: "אמרתי משפט
+         והוא אמר מילה אחרת"). Voice scoring forgives one slip on 4+ letter words. */
+      var a2 = hebDeprefix(a), b2 = hebDeprefix(b);
+      if (a2 === b2) return true;
+      if (Math.min(a2.length, b2.length) <= 3) return false;  // short Hebrew words must be exact
+      return editDistance(a2, b2) <= 1;                       // one ASR slip on longer words
+    }
     if (a.length <= 3 || b.length <= 3) return a === b;      // short words must be exact
     if (Math.min(a.length, b.length) <= 5) {
       // short-ish words: onset consonant errors (west/vest, right/light) must NOT pass

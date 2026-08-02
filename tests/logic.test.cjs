@@ -24,6 +24,32 @@ ok(!L.wordsMatch('cat', 'cut'), 'short words must be exact');
 ok(L.wordsMatch('restaurant', 'restaraunt'), 'long fuzzy match');
 ok(!L.wordsMatch('house', 'mouse'), 'house/mouse: 0.8 sim but len5 → check');
 
+// --- Hebrew normalization + matching (v2.9.0 — Gal live report 2026-08-02:
+// "אמרתי משפט והוא אמר מילה אחרת" — the he track scored with Latin rules) ---
+L.setLang('he');
+eq(L.normalize('אוּלָם'), L.normalize('אולם'), 'niqqud stripped');
+eq(L.normalize('ז׳רגון'), L.normalize("ז'רגון"), 'Hebrew geresh == ascii apostrophe');
+eq(L.normalize('בית־ספר'), 'בית ספר', 'maqaf splits, not glues');
+eq(L.normalize('סוף'), L.normalize('סופ'), 'final letters folded');
+eq(L.normalize('יש לי 3'), L.normalize('יש לי שלוש'), 'he digits → number words');
+ok(L.wordsMatch(L.normalize('ואולם'), L.normalize('אולם')), 'ASR-merged ו connective still matches');
+ok(L.wordsMatch(L.normalize('הספר'), L.normalize('ספר')), 'ASR-merged ה connective still matches');
+ok(L.wordsMatch(L.normalize('אולם'), L.normalize('אולי')), 'one ASR slip on a 4-letter word forgiven');
+ok(!L.wordsMatch(L.normalize('עט'), L.normalize('אט')), 'short Hebrew words must be exact');
+ok(!L.wordsMatch(L.normalize('שער'), L.normalize('ער')), 'no onset-drop on short Hebrew words');
+{
+  const hr = L.alignScore('אולם המצב השתנה', 'ואולם המצב השתנה');
+  eq(hr.score, 100, 'he sentence with merged connective scores 100');
+}
+
+// --- French normalization (v2.9.0 — pack landing separately) ---
+L.setLang('fr');
+eq(L.normalize('Année'), 'annee', 'fr diacritics stripped');
+eq(L.normalize('ma sœur'), 'ma soeur', 'fr ligature œ → oe');
+eq(L.normalize("J'ai 17 ans"), 'jai dix sept ans', 'fr elision + number words');
+ok(L.wordsMatch(L.normalize('français'), L.normalize('francais')), 'fr cedilla-insensitive match');
+L.setLang('en');
+
 // --- alignment scoring ---
 L.setLang('en');
 let r = L.alignScore('I am from Israel', 'i am from israel');
